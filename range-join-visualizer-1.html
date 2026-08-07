@@ -1,0 +1,2075 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Range Join — Bucket Decomposition</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --void:#060A12;
+    --panel:#0E1520;
+    --panel2:#131C29;
+    --line:#1E2A3A;
+    --line-soft:#182231;
+    --text:#DCE6F0;
+    --muted:#5C6B7D;
+    --muted2:#3D4A5A;
+    --cyan:#29D3C6;
+    --cyan-dim:#164943;
+    --amber:#FFB84D;
+    --amber-dim:#4A3418;
+    --rose:#FF5C7A;
+    --rose-dim:#3A1620;
+    --blue:#5B8DEF;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:
+      radial-gradient(ellipse 1200px 600px at 50% -10%, #0D1826 0%, var(--void) 60%);
+    color:var(--text);
+    font-family:'JetBrains Mono', ui-monospace, monospace;
+    min-height:100vh;
+    padding:28px 20px 60px;
+  }
+  .wrap{max-width:1160px; margin:0 auto;}
+
+  /* ---------- Header ---------- */
+  header{
+    display:flex; justify-content:space-between; align-items:flex-end;
+    padding-bottom:18px; margin-bottom:22px;
+    border-bottom:1px solid var(--line);
+  }
+  .title-block h1{
+    font-family:'Space Grotesk', sans-serif;
+    font-size:26px; font-weight:700; letter-spacing:0.3px;
+    color:var(--text);
+  }
+  .title-block .sub{
+    font-size:12px; color:var(--muted); margin-top:6px; letter-spacing:0.4px;
+  }
+  .ticker{
+    font-size:11px; color:var(--muted2); text-align:right; line-height:1.7;
+  }
+  .ticker span{color:var(--cyan);}
+  .live-dot{
+    display:inline-block; width:6px; height:6px; border-radius:50%;
+    background:var(--cyan); margin-right:6px;
+    box-shadow:0 0 6px var(--cyan);
+    animation:pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse{0%,100%{opacity:1;} 50%{opacity:0.25;}}
+
+  /* ---------- Panels ---------- */
+  .panel{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:20px 22px;
+    margin-bottom:18px;
+  }
+  .panel-title{
+    font-family:'Space Grotesk', sans-serif;
+    font-size:13px; font-weight:600; letter-spacing:1.2px; text-transform:uppercase;
+    color:var(--muted); margin-bottom:16px;
+    display:flex; align-items:center; gap:8px;
+  }
+  .panel-title .n{
+    color:var(--void); background:var(--muted); border-radius:4px;
+    font-size:10px; padding:2px 6px; font-weight:700;
+  }
+
+  /* ---------- Controls ---------- */
+  .controls-grid{
+    display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:16px;
+    margin-bottom:16px;
+  }
+  .field label{
+    display:block; font-size:10px; text-transform:uppercase; letter-spacing:1px;
+    color:var(--muted); margin-bottom:7px;
+  }
+  .field input[type=number], .field select{
+    width:100%; background:var(--panel2); border:1px solid var(--line);
+    color:var(--text); padding:9px 10px; border-radius:6px; font-family:inherit;
+    font-size:13px; outline:none; transition:border-color .15s;
+  }
+  .field input[type=number]:focus, .field select:focus{border-color:var(--blue);}
+  .btn-row{display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;}
+  button{
+    font-family:inherit; font-size:12px; font-weight:600; letter-spacing:0.4px;
+    padding:10px 18px; border-radius:6px; border:1px solid var(--line);
+    background:var(--panel2); color:var(--text); cursor:pointer;
+    transition:all .15s;
+  }
+  button:hover{border-color:var(--blue); color:#fff;}
+  button:active{transform:translateY(1px);}
+  button.primary{
+    background:var(--cyan); color:#04211D; border-color:var(--cyan);
+  }
+  button.primary:hover{background:#3EE6D8; border-color:#3EE6D8; color:#04211D;}
+  button:disabled{opacity:0.35; cursor:not-allowed;}
+  button:disabled:hover{border-color:var(--line); color:var(--text);}
+
+  /* ---------- Stage stepper ---------- */
+  .stages{
+    display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-bottom:6px;
+  }
+  .stage{
+    border:1px solid var(--line); border-radius:8px; padding:12px 12px;
+    background:var(--panel2); opacity:0.4; transition:all .25s;
+  }
+  .stage.active{opacity:1; border-color:var(--blue); box-shadow:0 0 0 1px var(--blue), 0 0 18px -6px var(--blue);}
+  .stage.done{opacity:0.85; border-color:var(--cyan);}
+  .stage .num{font-size:10px; color:var(--muted); letter-spacing:1px;}
+  .stage .lbl{font-family:'Space Grotesk',sans-serif; font-size:12.5px; font-weight:600; margin-top:4px;}
+  .stage .desc{font-size:10.5px; color:var(--muted); margin-top:6px; line-height:1.5;}
+
+  /* ---------- Timeline ---------- */
+  .timeline-wrap{position:relative; padding:10px 0 4px;}
+  .timeline-axis{
+    display:flex; justify-content:space-between; font-size:10px; color:var(--muted2);
+    margin-bottom:8px; padding:0 2px;
+  }
+  .buckets-row{
+    display:flex; gap:2px; height:64px; position:relative; border-radius:6px; overflow:hidden;
+  }
+  .bucket{
+    flex:1; background:var(--panel2); border:1px solid var(--line-soft);
+    position:relative; transition:background .3s, border-color .3s;
+    display:flex; align-items:flex-end; justify-content:center;
+    cursor:default;
+  }
+  .bucket .fill{
+    width:100%; background:linear-gradient(180deg, #223247, #1a2635);
+    transition:height .4s ease, background .3s;
+  }
+  .bucket.touched .fill{background:linear-gradient(180deg, #2c3f57, #223247);}
+  .bucket.full .fill{background:linear-gradient(180deg, var(--cyan), #14766D);}
+  .bucket.boundary .fill{background:linear-gradient(180deg, var(--amber), #A6721F);}
+  .bucket.scanned-out .fill{opacity:0.35;}
+  .bucket .count-lbl{
+    position:absolute; top:5px; left:0; right:0; text-align:center;
+    font-size:9px; color:var(--muted2);
+  }
+  .bucket.touched .count-lbl, .bucket.full .count-lbl, .bucket.boundary .count-lbl{color:var(--text);}
+
+  .trade-window{
+    position:absolute; top:-8px; height:8px; background:var(--blue);
+    border-radius:3px; box-shadow:0 0 10px -1px var(--blue);
+  }
+  .trade-window .handle{
+    position:absolute; top:-3px; width:2px; height:14px; background:#fff;
+  }
+
+  .tick-track{
+    position:relative; height:34px; margin-top:8px; border-top:1px dashed var(--line);
+  }
+  .tick-dot{
+    position:absolute; top:8px; width:7px; height:7px; border-radius:50%;
+    background:var(--muted2); transform:translateX(-50%);
+    transition:background .25s, transform .25s, box-shadow .25s;
+  }
+  .tick-dot.included{background:var(--cyan); box-shadow:0 0 6px var(--cyan); transform:translateX(-50%) scale(1.3);}
+  .tick-dot.excluded{background:var(--rose); opacity:0.55;}
+
+  .legend{display:flex; gap:20px; flex-wrap:wrap; margin-top:14px; font-size:10.5px; color:var(--muted);}
+  .legend .sw{display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:6px; vertical-align:-1px;}
+
+  /* ---------- Results ---------- */
+  .results-grid{
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px;
+  }
+  .stat-card{
+    background:var(--panel2); border:1px solid var(--line); border-radius:8px;
+    padding:16px; text-align:left;
+  }
+  .stat-card .k{font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--muted);}
+  .stat-card .v{
+    font-family:'Space Grotesk',sans-serif; font-size:24px; font-weight:700; margin-top:8px;
+    color:var(--text);
+  }
+  .stat-card.hi .v{color:var(--cyan);}
+  .stat-card.warn .v{color:var(--amber);}
+  .stat-card .sub{font-size:10px; color:var(--muted2); margin-top:4px;}
+
+  .compare-bar{margin-top:8px;}
+  .compare-row{display:flex; align-items:center; gap:12px; margin-bottom:10px;}
+  .compare-row .lbl{width:150px; font-size:10.5px; color:var(--muted); flex-shrink:0;}
+  .compare-row .track{flex:1; height:16px; background:var(--panel2); border-radius:4px; overflow:hidden; border:1px solid var(--line);}
+  .compare-row .fill{height:100%; transition:width 1s cubic-bezier(.2,.8,.2,1);}
+  .compare-row .fill.naive{background:linear-gradient(90deg,var(--rose),#8a2f42);}
+  .compare-row .fill.bucketed{background:linear-gradient(90deg,var(--cyan),#14766D);}
+  .compare-row .val{width:80px; text-align:right; font-size:11px; color:var(--text); flex-shrink:0;}
+
+  .stage-narration{
+    font-size:12.5px; color:var(--text); line-height:1.6; min-height:38px;
+    padding:12px 14px; background:var(--panel2); border-radius:6px; border:1px solid var(--line);
+    margin-top:14px;
+  }
+  .stage-narration b{color:var(--cyan);}
+
+  footer{text-align:center; font-size:10.5px; color:var(--muted2); margin-top:30px;}
+
+  /* ---------- Source tables ---------- */
+  .tables-grid{display:grid; grid-template-columns:1fr 1.4fr; gap:18px;}
+  .table-box{background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:14px;}
+  .table-name{font-family:'Space Grotesk',sans-serif; font-size:13px; font-weight:600; margin-bottom:10px; color:var(--text);}
+  .table-tag{font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--muted); font-weight:400; margin-left:8px;}
+  .data-table{width:100%; border-collapse:collapse; font-size:11.5px;}
+  .data-table th{
+    text-align:left; color:var(--muted); font-weight:500; text-transform:uppercase;
+    font-size:9.5px; letter-spacing:0.5px; padding:5px 8px; border-bottom:1px solid var(--line);
+  }
+  .data-table td{padding:5px 8px; border-bottom:1px solid var(--line-soft); color:var(--text);}
+  .data-table tr:last-child td{border-bottom:none;}
+  .data-table td.mono-hi{color:var(--cyan);}
+  .table-more{font-size:10px; color:var(--muted2); margin-top:8px; text-align:center;}
+  .join-condition{
+    margin-top:14px; padding:11px 14px; background:var(--panel2); border:1px dashed var(--blue);
+    border-radius:6px; font-size:12px; color:var(--text);
+  }
+  .jc-label{font-size:9.5px; color:var(--blue); letter-spacing:1px; margin-right:10px;}
+  .jc-and{color:var(--amber); margin:0 4px;}
+  @media(max-width:760px){.tables-grid{grid-template-columns:1fr;}}
+
+  /* ---------- Sticky playback toolbar ---------- */
+  .toolbar{
+    position:sticky; top:12px; z-index:50;
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    background:rgba(14,21,32,0.92); backdrop-filter:blur(8px);
+    border:1px solid var(--line); border-radius:10px;
+    padding:12px 16px; margin-bottom:18px;
+    box-shadow:0 8px 24px -8px rgba(0,0,0,0.5);
+  }
+  .toolbar .dots{display:flex; gap:6px;}
+  .toolbar .dot{
+    width:9px; height:9px; border-radius:50%; background:var(--panel2);
+    border:1px solid var(--line); transition:all .25s;
+  }
+  .toolbar .dot.active{background:var(--blue); border-color:var(--blue); box-shadow:0 0 8px var(--blue);}
+  .toolbar .dot.done{background:var(--cyan); border-color:var(--cyan);}
+  .toolbar .stage-tag{font-size:11px; color:var(--muted); min-width:70px;}
+  .toolbar .stage-tag b{color:var(--text);}
+  .toolbar .nav-actions{display:flex; gap:10px; margin-left:auto; flex-wrap:wrap;}
+  @media(max-width:640px){.toolbar{position:static;} .toolbar .nav-actions{margin-left:0; width:100%; justify-content:center;}}
+
+  /* ---------- Derivation log ---------- */
+  .derivation{
+    margin-top:14px; background:var(--panel2); border:1px solid var(--line);
+    border-radius:8px; padding:4px 0; max-height:260px; overflow-y:auto;
+  }
+  .derivation .row{
+    display:grid; grid-template-columns:70px 1fr; gap:10px;
+    padding:9px 14px; border-bottom:1px solid var(--line-soft);
+    font-size:11.5px; opacity:0; transform:translateY(4px);
+    animation:rowIn .35s ease forwards;
+  }
+  .derivation .row:last-child{border-bottom:none;}
+  @keyframes rowIn{to{opacity:1; transform:translateY(0);}}
+  .derivation .tag{color:var(--blue); font-weight:600; font-size:10px; letter-spacing:0.5px;}
+  .derivation .math{color:var(--text); line-height:1.5;}
+  .derivation .math .op{color:var(--amber);}
+  .derivation .math .eq{color:var(--cyan); font-weight:600;}
+  .derivation-empty{padding:16px; text-align:center; color:var(--muted2); font-size:11.5px;}
+
+  /* ---------- Case reference ---------- */
+  .case-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:12px;}
+  .case-card{
+    background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:14px;
+    transition:border-color .25s, box-shadow .25s; cursor:pointer;
+  }
+  .case-card.match{border-color:var(--cyan); box-shadow:0 0 0 1px var(--cyan);}
+  .case-card:hover{border-color:var(--blue);}
+  .case-card .ct{font-family:'Space Grotesk',sans-serif; font-size:12.5px; font-weight:600; margin-bottom:6px;}
+  .case-card .cd{font-size:11px; color:var(--muted); line-height:1.55;}
+  .case-card .badge{
+    display:inline-block; font-size:9px; letter-spacing:0.5px; padding:2px 7px; border-radius:10px;
+    background:var(--cyan-dim); color:var(--cyan); margin-bottom:8px; font-weight:600;
+  }
+  .case-card .try{font-size:9.5px; color:var(--blue); margin-top:8px; letter-spacing:0.4px;}
+  @media(max-width:760px){.case-grid{grid-template-columns:1fr;}}
+
+  /* ---------- Presets ---------- */
+  .preset-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px;}
+  .preset-card{
+    background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:13px;
+    cursor:pointer; transition:all .2s; text-align:left;
+  }
+  .preset-card:hover{border-color:var(--blue); transform:translateY(-1px);}
+  .preset-card.active{border-color:var(--cyan); box-shadow:0 0 0 1px var(--cyan);}
+  .preset-card .pt{font-family:'Space Grotesk',sans-serif; font-size:12px; font-weight:600; margin-bottom:5px;}
+  .preset-card .pd{font-size:10.5px; color:var(--muted); line-height:1.5;}
+  .preset-card .pn{font-size:9px; color:var(--amber); margin-top:6px; letter-spacing:0.3px;}
+
+  /* ---------- SQL + stage output ---------- */
+  #panel-timeline{scroll-margin-top:96px;}
+  .sql-output-grid{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:14px;}
+  @media(max-width:900px){.sql-output-grid{grid-template-columns:1fr;}}
+  .sql-box{
+    background:#080B12; border:1px solid var(--line); border-radius:8px;
+    padding:14px 16px; font-size:11px; line-height:1.7; overflow-x:auto;
+    white-space:pre; color:var(--muted);
+  }
+  .sql-box .kw{color:var(--blue); font-weight:600;}
+  .sql-box .hl{background:var(--cyan-dim); color:var(--cyan); border-radius:3px; padding:1px 2px;}
+  .sql-box .cm{color:var(--muted2); font-style:italic;}
+  .out-box{background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:14px 16px; overflow-x:auto;}
+  .out-caption{font-size:10.5px; color:var(--muted); margin-bottom:10px;}
+  .out-table{width:100%; border-collapse:collapse; font-size:11px;}
+  .out-table th{text-align:left; color:var(--muted); font-weight:500; text-transform:uppercase; font-size:9px; letter-spacing:0.4px; padding:5px 7px; border-bottom:1px solid var(--line);}
+  .out-table td{padding:5px 7px; border-bottom:1px solid var(--line-soft); color:var(--text); white-space:nowrap;}
+  .out-table tr.included td{color:var(--cyan);}
+  .out-table tr.excluded td{color:var(--rose); opacity:0.6;}
+  .out-table tr.total td{border-top:1px solid var(--line); font-weight:700; color:var(--amber);}
+  .out-empty{font-size:11px; color:var(--muted2); padding:8px 0;}
+
+  .full-sql{
+    background:#080B12; border:1px solid var(--line); border-radius:8px; padding:16px 18px;
+    font-size:11px; line-height:1.75; overflow-x:auto; white-space:pre; color:var(--muted);
+  }
+  .full-sql .kw{color:var(--blue); font-weight:600;}
+  .full-sql .cm{color:var(--muted2); font-style:italic;}
+  .full-sql .fn{color:var(--amber);}
+
+  /* ---------- Stage nav (prev/next, next to pipeline) ---------- */
+  .stage{cursor:pointer;}
+  .stage:hover{border-color:var(--blue);}
+  .stage-nav{
+    display:flex; align-items:center; justify-content:center; gap:14px;
+    margin-top:12px; padding-top:12px; border-top:1px solid var(--line-soft);
+  }
+  .stage-nav button{padding:8px 16px;}
+  .stage-nav .pos{font-size:11px; color:var(--muted); min-width:70px; text-align:center;}
+  .delay-field{display:flex; align-items:center; gap:6px; font-size:10.5px; color:var(--muted);}
+  .delay-field input{
+    width:64px; background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    padding:6px 8px; border-radius:5px; font-family:inherit; font-size:11px; outline:none;
+  }
+
+  /* ---------- Try it yourself ---------- */
+  .try-grid{display:grid; grid-template-columns:1.1fr 1fr; gap:20px;}
+  @media(max-width:800px){.try-grid{grid-template-columns:1fr;}}
+  .try-prompt{font-size:12.5px; line-height:1.7; color:var(--text);}
+  .try-prompt code{color:var(--amber);}
+  .try-fields{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:14px 0;}
+  .try-fields .field label{font-size:9.5px;}
+  .try-feedback{
+    margin-top:12px; padding:12px 14px; border-radius:6px; font-size:12px; line-height:1.6;
+    border:1px solid var(--line); background:var(--panel2); min-height:20px;
+  }
+  .try-feedback.correct{border-color:var(--cyan); color:var(--cyan);}
+  .try-feedback.wrong{border-color:var(--rose); color:var(--rose);}
+
+  /* ---------- Landing page ---------- */
+  .landing-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:20px; margin-top:8px;}
+  .landing-tile{
+    background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:26px 24px; cursor:pointer; transition:all .2s;
+  }
+  .landing-tile:hover{border-color:var(--cyan); transform:translateY(-2px); box-shadow:0 12px 28px -10px rgba(0,0,0,0.6);}
+  .lt-tag{font-size:10px; letter-spacing:1.2px; color:var(--cyan); font-weight:700; margin-bottom:10px;}
+  .lt-title{font-family:'Space Grotesk',sans-serif; font-size:19px; font-weight:700; margin-bottom:10px;}
+  .lt-desc{font-size:12px; color:var(--muted); line-height:1.6; margin-bottom:14px;}
+  .lt-meta{font-size:10px; color:var(--muted2); margin-bottom:14px;}
+  .lt-cta{font-size:12px; color:var(--blue); font-weight:600;}
+
+  .back-btn{
+    margin-bottom:16px; font-family:inherit; font-size:11.5px; font-weight:600;
+    padding:8px 14px; border-radius:6px; border:1px solid var(--line);
+    background:var(--panel2); color:var(--muted); cursor:pointer; transition:all .15s;
+  }
+  .back-btn:hover{border-color:var(--blue); color:#fff;}
+
+  /* ---------- Shard chart (salting view) ---------- */
+  .shard-chart{display:flex; align-items:flex-end; gap:6px; height:180px; padding:10px 4px; border-bottom:1px solid var(--line);}
+  .shard-bar-wrap{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; min-width:26px;}
+  .shard-bar{width:100%; border-radius:4px 4px 0 0; background:var(--panel2); border:1px solid var(--line-soft); transition:height .5s ease, background .3s;}
+  .shard-bar.hot{background:linear-gradient(180deg,var(--rose),#8a2f42);}
+  .shard-bar.shard{background:linear-gradient(180deg,var(--cyan),#14766D);}
+  .shard-lbl{font-size:9px; color:var(--muted); margin-top:6px; text-align:center; line-height:1.4;}
+  .shard-val{font-size:10px; color:var(--text); font-weight:600; margin-bottom:4px;}
+</style>
+</head>
+<body>
+
+<!-- ============ LANDING PAGE ============ -->
+<div class="wrap" id="view-landing">
+  <header>
+    <div class="title-block">
+      <h1>Spark Join Playground</h1>
+      <div class="sub">interactive walkthroughs — pick an example</div>
+    </div>
+    <div class="ticker">
+      <div><span class="live-dot"></span>trades ⋈ market_data</div>
+      <div>two worked examples below</div>
+    </div>
+  </header>
+
+  <div class="landing-grid">
+    <div class="landing-tile" data-target="view-bucket">
+      <div class="lt-tag">RANGE JOIN</div>
+      <div class="lt-title">Bucket Decomposition</div>
+      <div class="lt-desc">Join trades.start_time/end_time against market_data.transaction_time without scanning every row — pre-aggregate into buckets, trust the ones fully inside the window, scan only the two edges.</div>
+      <div class="lt-meta">5 stages · SQL + live tables · presets &amp; try-it example</div>
+      <div class="lt-cta">Open walkthrough →</div>
+    </div>
+    <div class="landing-tile" data-target="view-salting">
+      <div class="lt-tag">SKEW FIX</div>
+      <div class="lt-title">Salting a Hot Key</div>
+      <div class="lt-desc">One sym has far more rows than the rest, so its shuffle partition overloads a single task. Split it across N synthetic keys so the join runs in parallel instead of bottlenecking on one task.</div>
+      <div class="lt-meta">5 stages · SQL + live tables · before/after partition chart</div>
+      <div class="lt-cta">Open walkthrough →</div>
+    </div>
+  </div>
+
+  <footer>same trades / market_data schema throughout · pick either card to begin</footer>
+</div>
+
+<!-- ============ VIEW: BUCKET DECOMPOSITION ============ -->
+<div class="wrap" id="view-bucket" style="display:none;">
+  <button class="back-btn" data-target="view-landing">← All examples</button>
+
+
+  <header>
+    <div class="title-block">
+      <h1>Range Join — Bucket Decomposition</h1>
+      <div class="sub">trade window → market tick aggregation, stage by stage</div>
+    </div>
+    <div class="ticker">
+      <div><span class="live-dot"></span>market_data_buckets <span id="tk-syms">·</span></div>
+      <div>bucket size <span id="tk-bucket">—</span> · ticks <span id="tk-ticks">—</span></div>
+    </div>
+  </header>
+
+  <!-- STICKY PLAYBACK TOOLBAR -->
+  <div class="toolbar">
+    <div class="stage-tag">Stage <b id="tb-stage-n">–</b> / 4</div>
+    <div class="dots" id="tb-dots">
+      <div class="dot" data-d="0"></div><div class="dot" data-d="1"></div><div class="dot" data-d="2"></div><div class="dot" data-d="3"></div><div class="dot" data-d="4"></div>
+    </div>
+    <label style="display:flex; align-items:center; gap:6px; font-size:10.5px; color:var(--muted); cursor:pointer;">
+      <input type="checkbox" id="in-autoscroll" checked style="accent-color:var(--cyan);"> Auto-scroll
+    </label>
+    <label style="display:flex; align-items:center; gap:6px; font-size:10.5px; color:var(--muted); cursor:pointer;">
+      <input type="checkbox" id="in-distinct" style="accent-color:var(--amber);"> Distinct prices (approx/HLL)
+    </label>
+    <div class="delay-field">
+      <span>Delay</span>
+      <input type="number" id="in-delay" value="750" min="200" max="3000" step="50">
+      <span>ms</span>
+    </div>
+    <div class="nav-actions">
+      <button id="btn-run" class="primary">▶ Run all</button>
+      <button id="btn-prev">← Prev</button>
+      <button id="btn-step">Next stage →</button>
+      <button id="btn-reset">↺ Reset</button>
+      <button id="btn-export">⬇ Export result</button>
+    </div>
+  </div>
+
+  <!-- PRESETS -->
+  <div class="panel">
+    <div class="panel-title"><span class="n">WALKTHROUGH</span> Preloaded cases — click to load data, then step through with Next</div>
+    <div class="preset-grid" id="preset-grid"></div>
+  </div>
+
+  <!-- CONTROLS -->
+  <div class="panel">
+    <div class="panel-title"><span class="n">SETUP</span> Generate market_data &amp; a trade row</div>
+    <div class="controls-grid">
+      <div class="field">
+        <label>Timeline length (min)</label>
+        <input type="number" id="in-timeline" value="10" min="4" max="20">
+      </div>
+      <div class="field">
+        <label>Bucket size (sec)</label>
+        <input type="number" id="in-bucket" value="60" min="10" max="120" step="10">
+      </div>
+      <div class="field">
+        <label>Tick density (ticks/min)</label>
+        <input type="number" id="in-density" value="40" min="5" max="150">
+      </div>
+      <div class="field">
+        <label>trades.start_time (sec)</label>
+        <input type="number" id="in-start" value="90" min="0">
+      </div>
+      <div class="field">
+        <label>trades.end_time (sec)</label>
+        <input type="number" id="in-end" value="270" min="0">
+      </div>
+    </div>
+    <div class="btn-row">
+      <button id="btn-generate" class="primary">Generate market_data</button>
+    </div>
+  </div>
+
+  <!-- SOURCE TABLES -->
+  <div class="panel">
+    <div class="panel-title"><span class="n">TABLES</span> The two tables being joined</div>
+    <div class="tables-grid">
+      <div class="table-box">
+        <div class="table-name">trades <span class="table-tag">1 row shown</span></div>
+        <table class="data-table">
+          <thead><tr><th>trade_id</th><th>sym</th><th>start_time</th><th>end_time</th></tr></thead>
+          <tbody id="tbl-trades"></tbody>
+        </table>
+      </div>
+      <div class="table-box">
+        <div class="table-name">market_data <span class="table-tag" id="mkt-row-tag">— rows</span></div>
+        <table class="data-table">
+          <thead><tr><th>sym</th><th>transaction_time</th><th>price</th></tr></thead>
+          <tbody id="tbl-market"></tbody>
+        </table>
+        <div class="table-more" id="mkt-more"></div>
+      </div>
+    </div>
+    <div class="join-condition">
+      <span class="jc-label">JOIN CONDITION</span>
+      market_data.sym = trades.sym <span class="jc-and">AND</span> market_data.transaction_time BETWEEN trades.start_time AND trades.end_time
+    </div>
+  </div>
+
+  <!-- CASES -->
+  <div class="panel">
+    <div class="panel-title"><span class="n">CASES</span> How many buckets get trusted vs scanned — depends on bucket size vs window size</div>
+    <div class="case-grid" id="case-grid">
+      <div class="case-card" data-case="single">
+        <div class="badge">0 full buckets</div>
+        <div class="ct">Window smaller than one bucket</div>
+        <div class="cd">e.g. 5-min buckets, 1-min trade window. <code>start_bucket = end_bucket</code> most of the time — the whole window sits inside one bucket. There is <b>nothing to trust</b>, every row must be scanned. The bucket trick gives zero savings here; it degrades to a plain filter on one bucket.</div>
+      </div>
+      <div class="case-card" data-case="straddle">
+        <div class="badge">0 full buckets, 2 touched</div>
+        <div class="ct">Window straddles one bucket edge</div>
+        <div class="cd">Same small window, but it happens to cross a bucket boundary — e.g. window ends just after a bucket starts. <code>start_bucket ≠ end_bucket</code>, yet <code>end_bucket − start_bucket − 1 = 0</code>. Both touched buckets are boundary buckets — still nothing "fully inside," both get row-scanned.</div>
+      </div>
+      <div class="case-card" data-case="multi">
+        <div class="badge">2+ full buckets</div>
+        <div class="ct">Window wider than several buckets</div>
+        <div class="cd">e.g. 1-min buckets, 5-min window. Buckets strictly between the start and end edge are <b>entirely swallowed</b> by the window — every row in them satisfies <code>BETWEEN start_time AND end_time</code> automatically, since the bucket's own time range is a subset of the window's. Trust their pre-agg, skip scanning them.</div>
+      </div>
+    </div>
+    <div class="stage-narration" style="margin-top:14px;" id="case-live">Configure bucket size and trade start/end above — this panel will highlight which case your current setup falls into.</div>
+  </div>
+
+  <!-- FULL SQL IMPLEMENTATION -->
+  <div class="panel">
+    <div class="panel-title"><span class="n">IMPLEMENTATION</span> Full working SQL — copy/paste into Spark SQL</div>
+    <div class="full-sql" id="full-sql-box"><span class="cm">-- Step 0: pre-aggregate market_data into fixed-size buckets, once</span>
+<span class="kw">CREATE TABLE</span> market_data_buckets <span class="kw">AS</span>
+<span class="kw">SELECT</span>
+  sym,
+  <span class="fn">FLOOR</span>(transaction_time_us / :bucket_size_us) <span class="kw">AS</span> bucket_id,
+  <span class="fn">COUNT</span>(*)                          <span class="kw">AS</span> bucket_count,
+  <span class="fn">MIN</span>(price)                        <span class="kw">AS</span> bucket_min,
+  <span class="fn">MAX</span>(price)                        <span class="kw">AS</span> bucket_max,
+  <span class="fn">MIN_BY</span>(price, transaction_time_us) <span class="kw">AS</span> bucket_first_price,
+  <span class="fn">MIN_BY</span>(transaction_time_us, transaction_time_us) <span class="kw">AS</span> bucket_first_ts
+<span class="kw">FROM</span> market_data
+<span class="kw">GROUP BY</span> sym, <span class="fn">FLOOR</span>(transaction_time_us / :bucket_size_us);
+
+<span class="cm">-- Step 1: derive each trade's touched bucket range</span>
+<span class="kw">WITH</span> trade_buckets <span class="kw">AS</span> (
+  <span class="kw">SELECT</span>
+    t.trade_id, t.sym, t.start_time_us, t.end_time_us,
+    <span class="fn">FLOOR</span>(t.start_time_us / :bucket_size_us) <span class="kw">AS</span> start_bucket,
+    <span class="fn">FLOOR</span>(t.end_time_us   / :bucket_size_us) <span class="kw">AS</span> end_bucket
+  <span class="kw">FROM</span> trades t
+),
+
+<span class="cm">-- Step 2: buckets strictly between the edges — trust pre-agg, no row scan</span>
+full_agg <span class="kw">AS</span> (
+  <span class="kw">SELECT</span>
+    tb.trade_id,
+    <span class="fn">SUM</span>(b.bucket_count)  <span class="kw">AS</span> full_count,
+    <span class="fn">MIN</span>(b.bucket_min)    <span class="kw">AS</span> full_min,
+    <span class="fn">MAX</span>(b.bucket_max)    <span class="kw">AS</span> full_max,
+    <span class="fn">MIN_BY</span>(b.bucket_first_price, b.bucket_first_ts) <span class="kw">AS</span> full_first_price
+  <span class="kw">FROM</span> trade_buckets tb
+  <span class="kw">JOIN</span> market_data_buckets b
+    <span class="kw">ON</span> b.sym = tb.sym
+   <span class="kw">AND</span> b.bucket_id <span class="kw">&gt;</span> tb.start_bucket
+   <span class="kw">AND</span> b.bucket_id <span class="kw">&lt;</span> tb.end_bucket
+  <span class="kw">GROUP BY</span> tb.trade_id
+),
+
+<span class="cm">-- Step 3: only the two edge buckets — exact row-level BETWEEN filter</span>
+boundary_agg <span class="kw">AS</span> (
+  <span class="kw">SELECT</span>
+    tb.trade_id,
+    <span class="fn">COUNT</span>(*)                             <span class="kw">AS</span> boundary_count,
+    <span class="fn">MIN</span>(m.price)                         <span class="kw">AS</span> boundary_min,
+    <span class="fn">MAX</span>(m.price)                         <span class="kw">AS</span> boundary_max,
+    <span class="fn">MIN_BY</span>(m.price, m.transaction_time_us) <span class="kw">AS</span> boundary_first_price
+  <span class="kw">FROM</span> trade_buckets tb
+  <span class="kw">JOIN</span> market_data m
+    <span class="kw">ON</span> m.sym = tb.sym
+   <span class="kw">AND</span> <span class="fn">FLOOR</span>(m.transaction_time_us / :bucket_size_us) <span class="kw">IN</span> (tb.start_bucket, tb.end_bucket)
+   <span class="kw">AND</span> m.transaction_time_us <span class="kw">BETWEEN</span> tb.start_time_us <span class="kw">AND</span> tb.end_time_us
+  <span class="kw">GROUP BY</span> tb.trade_id
+)
+
+<span class="cm">-- Step 4: combine — existence falls out of row_count for free</span>
+<span class="kw">SELECT</span>
+  tb.trade_id,
+  <span class="fn">COALESCE</span>(f.full_count,0) + <span class="fn">COALESCE</span>(b.boundary_count,0) <span class="kw">AS</span> row_count,
+  <span class="fn">LEAST</span>(f.full_min, b.boundary_min)     <span class="kw">AS</span> min_price,
+  <span class="fn">GREATEST</span>(f.full_max, b.boundary_max) <span class="kw">AS</span> max_price,
+  <span class="kw">CASE WHEN</span> <span class="fn">COALESCE</span>(f.full_count,0)+<span class="fn">COALESCE</span>(b.boundary_count,0) = 0
+       <span class="kw">THEN</span> <span class="cm">'NO_MARKET_DATA'</span> <span class="kw">ELSE</span> <span class="cm">'MATCHED'</span> <span class="kw">END</span> <span class="kw">AS</span> marker
+<span class="kw">FROM</span> trade_buckets tb
+<span class="kw">LEFT JOIN</span> full_agg f     <span class="kw">ON</span> f.trade_id = tb.trade_id
+<span class="kw">LEFT JOIN</span> boundary_agg b <span class="kw">ON</span> b.trade_id = tb.trade_id;</div>
+    <div class="stage-narration" style="margin-top:12px;">Bucket size is your one tuning knob — pick it as roughly <b>typical trade duration ÷ 10–50</b>, so most trades land in several full buckets plus 2 boundary buckets rather than being all-boundary (see Case 1/2 above).</div>
+  </div>
+
+  <!-- STAGES -->
+  <div class="panel">
+    <div class="panel-title"><span class="n">PIPELINE</span> Query execution stages</div>
+    <div class="stages" id="stages">
+      <div class="stage" data-stage="0">
+        <div class="num">STAGE 0</div>
+        <div class="lbl">Pre-aggregate</div>
+        <div class="desc">Bucket the whole day, compute min/max/count once</div>
+      </div>
+      <div class="stage" data-stage="1">
+        <div class="num">STAGE 1</div>
+        <div class="lbl">Locate window</div>
+        <div class="desc">Find start_bucket / end_bucket for this trade</div>
+      </div>
+      <div class="stage" data-stage="2">
+        <div class="num">STAGE 2</div>
+        <div class="lbl">Trust full buckets</div>
+        <div class="desc">Buckets strictly inside → use pre-agg, no scan</div>
+      </div>
+      <div class="stage" data-stage="3">
+        <div class="num">STAGE 3</div>
+        <div class="lbl">Scan boundaries</div>
+        <div class="desc">Edge buckets only → row-level time filter</div>
+      </div>
+      <div class="stage" data-stage="4">
+        <div class="num">STAGE 4</div>
+        <div class="lbl">Combine</div>
+        <div class="desc">Merge full-bucket + boundary results</div>
+      </div>
+    </div>
+    <div class="stage-nav">
+      <button id="btn-prev-inline">← Prev</button>
+      <div class="pos" id="stage-pos">not started</div>
+      <button id="btn-next-inline">Next →</button>
+    </div>
+    <div class="stage-narration" id="narration">Two tables below: <b>trades</b> (start_time, end_time) and <b>market_data</b> (transaction_time, price). Click any stage card above, or use Prev/Next, to step through the join.</div>
+  </div>
+
+  <!-- TIMELINE -->
+  <div class="panel" id="panel-timeline">
+    <div class="panel-title"><span class="n">VIEW</span> Timeline &amp; buckets</div>
+
+    <div class="out-caption" style="margin-top:0;">Source rows — trades (1 row) &amp; market_data (<span id="tl-mkt-count">—</span> rows)</div>
+    <div class="tables-grid" style="margin-bottom:16px;">
+      <div class="table-box">
+        <div class="table-name">trades</div>
+        <table class="data-table">
+          <thead><tr><th>trade_id</th><th>sym</th><th>start_time</th><th>end_time</th></tr></thead>
+          <tbody id="tl-tbl-trades"></tbody>
+        </table>
+      </div>
+      <div class="table-box">
+        <div class="table-name">market_data <span class="table-tag" id="tl-mkt-tag">— rows</span></div>
+        <table class="data-table">
+          <thead><tr><th>sym</th><th>transaction_time</th><th>price</th></tr></thead>
+          <tbody id="tl-tbl-market"></tbody>
+        </table>
+        <div class="table-more" id="tl-mkt-more"></div>
+      </div>
+    </div>
+
+    <div class="timeline-wrap">
+      <div class="timeline-axis" id="axis"></div>
+      <div style="position:relative;">
+        <div class="trade-window" id="trade-window"></div>
+        <div class="buckets-row" id="buckets-row"></div>
+      </div>
+      <div class="tick-track" id="tick-track"></div>
+    </div>
+    <div class="legend">
+      <div><span class="sw" style="background:var(--panel2); border:1px solid var(--line-soft);"></span>untouched bucket</div>
+      <div><span class="sw" style="background:var(--cyan);"></span>full bucket — trusted from pre-agg</div>
+      <div><span class="sw" style="background:var(--amber);"></span>boundary bucket — row-scanned</div>
+      <div><span class="sw" style="background:var(--muted2);"></span>tick, not yet evaluated</div>
+      <div><span class="sw" style="background:var(--rose);"></span>tick excluded (outside exact range)</div>
+    </div>
+    <div class="panel-title" style="margin-top:20px; margin-bottom:8px;"><span class="n">DERIVE</span> How the total is built, step by step</div>
+    <div class="derivation" id="derivation">
+      <div class="derivation-empty">Press <b>Next stage →</b> in the toolbar above — each step's arithmetic will appear here as it runs.</div>
+    </div>
+
+    <div class="panel-title" style="margin-top:20px; margin-bottom:0;"><span class="n">SQL + OUTPUT</span> What runs, what it produces, and why — for the current stage</div>
+    <div class="stage-narration" id="stage-explain" style="margin-top:12px;">Load an example above, then press <b>Next stage →</b> to see the explanation for each step here.</div>
+    <div class="sql-output-grid">
+      <div>
+        <div class="out-caption" style="margin-top:12px;">SQL for this stage</div>
+        <div class="sql-box" id="stage-sql-box">Run a stage to see its SQL here.</div>
+      </div>
+      <div>
+        <div class="out-caption" style="margin-top:12px;" id="out-caption">Intermediate result table</div>
+        <div class="out-box"><div class="out-empty" id="stage-out-empty">No stage run yet.</div><div id="stage-out-table"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RESULTS -->
+  <div class="panel">
+    <div class="panel-title"><span class="n">RESULT</span> Aggregates for this trade window</div>
+    <div class="results-grid">
+      <div class="stat-card hi"><div class="k">Row count</div><div class="v" id="res-count">—</div><div class="sub">ticks in window</div></div>
+      <div class="stat-card"><div class="k">Min price</div><div class="v" id="res-min">—</div></div>
+      <div class="stat-card"><div class="k">Max price</div><div class="v" id="res-max">—</div></div>
+      <div class="stat-card warn"><div class="k">First price</div><div class="v" id="res-first">—</div><div class="sub" id="res-first-sub">earliest tick in window</div></div>
+      <div class="stat-card" id="res-distinct-card" style="display:none;"><div class="k">Distinct prices (approx)</div><div class="v" id="res-distinct">—</div><div class="sub">HLL sketch union — ~1-2% error in production</div></div>
+      <div class="stat-card"><div class="k">Marker</div><div class="v" id="res-marker" style="font-size:16px;">—</div></div>
+    </div>
+
+    <div class="compare-bar">
+      <div class="panel-title" style="margin-top:22px; margin-bottom:14px;"><span class="n">COST</span> Rows physically scanned</div>
+      <div class="compare-row">
+        <div class="lbl">Naive full range scan</div>
+        <div class="track"><div class="fill naive" id="bar-naive" style="width:0%"></div></div>
+        <div class="val" id="val-naive">0</div>
+      </div>
+      <div class="compare-row">
+        <div class="lbl">Bucket decomposition</div>
+        <div class="track"><div class="fill bucketed" id="bar-bucketed" style="width:0%"></div></div>
+        <div class="val" id="val-bucketed">0</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TRY IT YOURSELF -->
+  <div class="panel">
+    <div class="panel-title"><span class="n">TRY IT</span> Work it out by hand before checking</div>
+    <div class="try-grid">
+      <div>
+        <div class="try-prompt">
+          Given: <code>bucket_size = 45s</code>, trade window <code>09:02:10 → 09:06:40</code>.<br><br>
+          Before running it — work out:
+          <ol style="margin:10px 0 0 18px; line-height:1.9;">
+            <li><code>start_bucket</code> = FLOOR(seconds-from-09:00 ÷ 45)</li>
+            <li><code>end_bucket</code> = FLOOR(seconds-from-09:00 ÷ 45)</li>
+            <li>how many <b>full</b> buckets sit strictly between them?</li>
+          </ol>
+        </div>
+        <div class="try-fields">
+          <div class="field"><label>Your start_bucket</label><input type="number" id="try-sb"></div>
+          <div class="field"><label>Your end_bucket</label><input type="number" id="try-eb"></div>
+          <div class="field" style="grid-column:1/-1;"><label>Your full-bucket count</label><input type="number" id="try-fb"></div>
+        </div>
+        <div class="btn-row">
+          <button id="btn-try-check" class="primary">Check my answer</button>
+          <button id="btn-try-load">Load this example</button>
+        </div>
+        <div class="try-feedback" id="try-feedback">Fill in your three answers, then hit Check.</div>
+      </div>
+      <div>
+        <div class="out-caption">Hint — how to get seconds from clock time</div>
+        <div class="sql-box" style="white-space:normal;">09:02:10 is 2 minutes 10 seconds past 09:00:00 → <b>130</b> seconds.<br>09:06:40 is 6 minutes 40 seconds past 09:00:00 → <b>400</b> seconds.<br><br>Then apply <code>FLOOR(seconds / bucket_size)</code> to each, exactly like Stage 1 does in the visualizer above. Full buckets = <code>end_bucket − start_bucket − 1</code>.</div>
+      </div>
+    </div>
+  </div>
+
+  <footer>bucket decomposition visualizer · full buckets are trusted from pre-aggregation, only boundary buckets are ever scanned row by row</footer>
+</div>
+
+<!-- ============ VIEW: SALTING A HOT KEY ============ -->
+<div class="wrap" id="view-salting" style="display:none;">
+  <button class="back-btn" data-target="view-landing">← All examples</button>
+
+  <header>
+    <div class="title-block">
+      <h1>Salting a Hot Key</h1>
+      <div class="sub">spreading one overloaded sym across N shuffle partitions</div>
+    </div>
+    <div class="ticker">
+      <div><span class="live-dot"></span>market_data ⋈ trades <span id="s-tk-hot">·</span></div>
+      <div>salt factor <span id="s-tk-n">—</span></div>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <div class="stage-tag">Stage <b id="s-tb-stage-n">–</b> / 4</div>
+    <div class="dots" id="s-tb-dots">
+      <div class="dot" data-d="0"></div><div class="dot" data-d="1"></div><div class="dot" data-d="2"></div><div class="dot" data-d="3"></div><div class="dot" data-d="4"></div>
+    </div>
+    <label style="display:flex; align-items:center; gap:6px; font-size:10.5px; color:var(--muted); cursor:pointer;">
+      <input type="checkbox" id="s-in-autoscroll" checked style="accent-color:var(--cyan);"> Auto-scroll
+    </label>
+    <div class="delay-field">
+      <span>Delay</span>
+      <input type="number" id="s-in-delay" value="750" min="200" max="3000" step="50">
+      <span>ms</span>
+    </div>
+    <div class="nav-actions">
+      <button id="s-btn-run" class="primary">▶ Run all</button>
+      <button id="s-btn-prev">← Prev</button>
+      <button id="s-btn-step">Next stage →</button>
+      <button id="s-btn-reset">↺ Reset</button>
+      <button id="s-btn-export">⬇ Export result</button>
+    </div>
+  </div>
+
+  <!-- SETUP -->
+  <div class="panel">
+    <div class="panel-title"><span class="n">SETUP</span> Row distribution across syms</div>
+    <div class="controls-grid">
+      <div class="field">
+        <label>Hot sym row count</label>
+        <input type="number" id="s-in-hot" value="5200" min="500" max="20000" step="100">
+      </div>
+      <div class="field">
+        <label>Other syms (avg rows each)</label>
+        <input type="number" id="s-in-other" value="400" min="50" max="2000" step="50">
+      </div>
+      <div class="field">
+        <label>Number of other syms</label>
+        <input type="number" id="s-in-nsyms" value="5" min="2" max="10">
+      </div>
+      <div class="field">
+        <label>Salt factor N</label>
+        <input type="number" id="s-in-saltn" value="4" min="2" max="16">
+      </div>
+    </div>
+    <div class="btn-row">
+      <button id="s-btn-generate" class="primary">Generate distribution</button>
+    </div>
+  </div>
+
+  <!-- PIPELINE -->
+  <div class="panel">
+    <div class="panel-title"><span class="n">PIPELINE</span> Salting execution stages</div>
+    <div class="stages" id="s-stages">
+      <div class="stage" data-stage="0">
+        <div class="num">STAGE 0</div>
+        <div class="lbl">Diagnose skew</div>
+        <div class="desc">GROUP BY sym, COUNT(*) — find the hot key</div>
+      </div>
+      <div class="stage" data-stage="1">
+        <div class="num">STAGE 1</div>
+        <div class="lbl">Pick salt factor N</div>
+        <div class="desc">Target shard size ≈ hot_count / N</div>
+      </div>
+      <div class="stage" data-stage="2">
+        <div class="num">STAGE 2</div>
+        <div class="lbl">Salt the large side</div>
+        <div class="desc">market_data.sym → sym_0..sym_(N-1) for hot rows only</div>
+      </div>
+      <div class="stage" data-stage="3">
+        <div class="num">STAGE 3</div>
+        <div class="lbl">Explode the small side</div>
+        <div class="desc">trades row → N candidate rows, one per salt value</div>
+      </div>
+      <div class="stage" data-stage="4">
+        <div class="num">STAGE 4</div>
+        <div class="lbl">Join + aggregate back</div>
+        <div class="desc">Join on salted key, GROUP BY trade_id recombines shards</div>
+      </div>
+    </div>
+    <div class="stage-nav">
+      <button id="s-btn-prev-inline">← Prev</button>
+      <div class="pos" id="s-stage-pos">not started</div>
+      <button id="s-btn-next-inline">Next →</button>
+    </div>
+    <div class="stage-narration" id="s-narration">Click any stage card, or use Next, to see how salting spreads the hot sym's rows across N shuffle partitions.</div>
+  </div>
+
+  <!-- VIEW -->
+  <div class="panel" id="s-panel-view">
+    <div class="panel-title"><span class="n">VIEW</span> Rows per shuffle key — before vs after</div>
+
+    <div class="out-caption" style="margin-top:0;">Source rows — trades (1 row on the hot sym) &amp; market_data (<span id="s-tl-mkt-count">—</span> rows)</div>
+    <div class="tables-grid" style="margin-bottom:16px;">
+      <div class="table-box">
+        <div class="table-name">trades</div>
+        <table class="data-table">
+          <thead><tr><th>trade_id</th><th>sym</th><th>start_time</th><th>end_time</th></tr></thead>
+          <tbody id="s-tl-tbl-trades"></tbody>
+        </table>
+      </div>
+      <div class="table-box">
+        <div class="table-name">market_data <span class="table-tag" id="s-tl-mkt-tag">— rows</span></div>
+        <table class="data-table">
+          <thead><tr><th>sym</th><th>transaction_time</th><th>price</th></tr></thead>
+          <tbody id="s-tl-tbl-market"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="shard-chart" id="shard-chart"></div>
+    <div class="legend">
+      <div><span class="sw" style="background:var(--rose);"></span>hot sym — one oversized shuffle partition</div>
+      <div><span class="sw" style="background:var(--cyan);"></span>hot sym's rows, after salting into N shards</div>
+      <div><span class="sw" style="background:var(--panel2); border:1px solid var(--line-soft);"></span>other syms — unaffected, already small</div>
+    </div>
+
+    <div class="panel-title" style="margin-top:20px; margin-bottom:8px;"><span class="n">DERIVE</span> How the shards get built and recombined</div>
+    <div class="derivation" id="s-derivation">
+      <div class="derivation-empty">Press <b>Next stage →</b> — each step's logic will appear here as it runs.</div>
+    </div>
+
+    <div class="panel-title" style="margin-top:20px; margin-bottom:0;"><span class="n">SQL + OUTPUT</span> What runs, what it produces, and why — for the current stage</div>
+    <div class="stage-narration" id="s-stage-explain" style="margin-top:12px;">Press <b>Next stage →</b> to see the explanation for each step here.</div>
+    <div class="sql-output-grid">
+      <div>
+        <div class="out-caption" style="margin-top:12px;">SQL for this stage</div>
+        <div class="sql-box" id="s-stage-sql-box">Run a stage to see its SQL here.</div>
+      </div>
+      <div>
+        <div class="out-caption" style="margin-top:12px;" id="s-out-caption">Intermediate result table</div>
+        <div class="out-box"><div class="out-empty" id="s-stage-out-empty">No stage run yet.</div><div id="s-stage-out-table"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RESULTS -->
+  <div class="panel">
+    <div class="panel-title"><span class="n">RESULT</span> Correctness check — salted vs unsalted join</div>
+    <div class="results-grid">
+      <div class="stat-card hi"><div class="k">Max partition size — before</div><div class="v" id="s-res-before">—</div><div class="sub">rows in the single hot-sym task</div></div>
+      <div class="stat-card hi"><div class="k">Max partition size — after</div><div class="v" id="s-res-after">—</div><div class="sub">rows in the largest shard, post-salt</div></div>
+      <div class="stat-card"><div class="k">trade_id T-1001 row_count</div><div class="v" id="s-res-count">—</div><div class="sub">identical with or without salting</div></div>
+      <div class="stat-card warn"><div class="k">Reduction factor</div><div class="v" id="s-res-factor">—</div><div class="sub">≈ salt factor N, when hot rows split evenly</div></div>
+    </div>
+    <div class="compare-bar">
+      <div class="compare-row">
+        <div class="lbl">Before salting</div>
+        <div class="track"><div class="fill naive" id="s-bar-before" style="width:0%"></div></div>
+        <div class="val" id="s-val-before">0</div>
+      </div>
+      <div class="compare-row">
+        <div class="lbl">After salting</div>
+        <div class="track"><div class="fill bucketed" id="s-bar-after" style="width:0%"></div></div>
+        <div class="val" id="s-val-after">0</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FULL SQL -->
+  <div class="panel">
+    <div class="panel-title"><span class="n">IMPLEMENTATION</span> Full working SQL — copy/paste into Spark SQL</div>
+    <div class="full-sql" id="s-full-sql-box"><span class="cm">-- Step 0: diagnose which key is hot</span>
+<span class="kw">SELECT</span> sym, <span class="fn">COUNT</span>(*) <span class="kw">AS</span> cnt
+<span class="kw">FROM</span> market_data
+<span class="kw">GROUP BY</span> sym
+<span class="kw">ORDER BY</span> cnt <span class="kw">DESC</span>;
+
+<span class="cm">-- Step 1: salt only the hot sym's rows on the LARGE side</span>
+<span class="kw">CREATE OR REPLACE TEMP VIEW</span> market_data_salted <span class="kw">AS</span>
+<span class="kw">SELECT</span> *,
+  <span class="kw">CASE WHEN</span> sym <span class="kw">IN</span> (:hot_syms)
+       <span class="kw">THEN</span> sym || <span class="cm">'_'</span> || <span class="fn">CAST</span>(<span class="fn">FLOOR</span>(<span class="fn">RAND</span>()*:N) <span class="kw">AS INT</span>)
+       <span class="kw">ELSE</span> sym
+  <span class="kw">END AS</span> salted_sym
+<span class="kw">FROM</span> market_data;
+
+<span class="cm">-- Step 2: explode the SMALL side — one row per salt value, hot syms only</span>
+<span class="kw">CREATE OR REPLACE TEMP VIEW</span> trades_salted <span class="kw">AS</span>
+<span class="kw">SELECT</span> t.*,
+  <span class="kw">CASE WHEN</span> t.sym <span class="kw">IN</span> (:hot_syms)
+       <span class="kw">THEN</span> t.sym || <span class="cm">'_'</span> || salt.value
+       <span class="kw">ELSE</span> t.sym
+  <span class="kw">END AS</span> salted_sym
+<span class="kw">FROM</span> trades t
+<span class="kw">LEFT JOIN</span> (<span class="kw">SELECT</span> <span class="fn">EXPLODE</span>(<span class="fn">SEQUENCE</span>(0, :N-1)) <span class="kw">AS</span> value) salt
+  <span class="kw">ON</span> t.sym <span class="kw">IN</span> (:hot_syms);
+
+<span class="cm">-- Step 3: join on the SALTED key, then GROUP BY trade_id — this recombines the N shards</span>
+<span class="kw">SELECT</span>
+  ts.trade_id,
+  <span class="fn">COUNT</span>(*)                              <span class="kw">AS</span> row_count,
+  <span class="fn">MIN</span>(md.price)                        <span class="kw">AS</span> min_price,
+  <span class="fn">MAX</span>(md.price)                        <span class="kw">AS</span> max_price,
+  <span class="fn">MIN_BY</span>(md.price, md.transaction_time) <span class="kw">AS</span> first_price
+<span class="kw">FROM</span> trades_salted ts
+<span class="kw">JOIN</span> market_data_salted md
+  <span class="kw">ON</span> md.salted_sym = ts.salted_sym
+ <span class="kw">AND</span> md.transaction_time <span class="kw">BETWEEN</span> ts.start_time <span class="kw">AND</span> ts.end_time
+<span class="kw">GROUP BY</span> ts.trade_id;  <span class="cm">-- NOT salted_sym — grouping by trade_id merges the shards back</span></div>
+    <div class="stage-narration" style="margin-top:12px;">Only <b>hot</b> keys get salted — salting every key would fragment already-small partitions and add shuffle overhead for no benefit. Pick N so <code>hot_count / N</code> lands near your other partitions' size.</div>
+  </div>
+
+  <footer>salting visualizer · correctness is unchanged — only the shuffle key changes, the final GROUP BY still runs on trade_id</footer>
+</div>
+
+<script>
+(function(){
+
+  let ticks = [];          // {t, price}
+  let buckets = [];        // {id, start, end, count, min, max, firstT, firstPrice, ticks:[...]}
+  let bucketSize = 60;
+  let timelineLen = 600;
+  let tradeStart = 90, tradeEnd = 270;
+  let currentStage = -1;
+  let running = false;
+
+  const $ = id => document.getElementById(id);
+
+  function mulberry32(seed){
+    return function(){
+      seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function fmtTime(sec){
+    const m = Math.floor(sec/60), s = Math.floor(sec%60);
+    return (m<10?'0':'')+m+':'+(s<10?'0':'')+s;
+  }
+
+  function generateData(seed, gap){
+    timelineLen = parseInt($('in-timeline').value) * 60;
+    bucketSize = parseInt($('in-bucket').value);
+    const density = parseInt($('in-density').value);
+    const nTicksTarget = Math.floor((timelineLen/60) * density);
+    const rand = seed ? mulberry32(seed) : Math.random;
+
+
+    ticks = [];
+    let price = 100 + rand()*10;
+    for(let i=0;i<nTicksTarget;i++){
+      const t = rand()*timelineLen;
+      if(gap && t>=gap[0] && t<=gap[1]) continue; // skip ticks in the gap zone
+      price += (rand()-0.5)*1.4;
+      price = Math.max(60, price);
+      ticks.push({t, price: Math.round(price*100)/100});
+    }
+    ticks.sort((a,b)=>a.t-b.t);
+
+    const nBuckets = Math.ceil(timelineLen/bucketSize);
+    buckets = [];
+    for(let i=0;i<nBuckets;i++){
+      buckets.push({
+        id:i, start:i*bucketSize, end:(i+1)*bucketSize,
+        ticks:[], count:0, min:null, max:null, firstT:null, firstPrice:null,
+        distinctPrices:new Set()
+      });
+    }
+    ticks.forEach(tk=>{
+      const bid = Math.min(nBuckets-1, Math.floor(tk.t/bucketSize));
+      const b = buckets[bid];
+      b.ticks.push(tk);
+      b.count++;
+      b.distinctPrices.add(tk.price);
+      if(b.min===null || tk.price<b.min) b.min = tk.price;
+      if(b.max===null || tk.price>b.max) b.max = tk.price;
+      if(b.firstT===null || tk.t<b.firstT){ b.firstT = tk.t; b.firstPrice = tk.price; }
+    });
+
+    $('tk-syms').textContent = 'sym=RELIANCE.NS';
+    $('tk-bucket').textContent = bucketSize+'s';
+    $('tk-ticks').textContent = ticks.length;
+
+    renderTimeline();
+    renderTables();
+    resetStages();
+  }
+
+  function fmtClock(sec){
+    const h = 9, m = Math.floor(sec/60), s = Math.floor(sec%60);
+    const totalM = m;
+    const hh = 9 + Math.floor(totalM/60);
+    const mm = totalM % 60;
+    return (hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm+':'+(s<10?'0':'')+s;
+  }
+
+  function renderTables(){
+    tradeStart = parseInt($('in-start').value);
+    tradeEnd = parseInt($('in-end').value);
+
+    const tradeRowHtml = '<tr><td class="mono-hi">T-1001</td><td>RELIANCE.NS</td><td>'+fmtClock(tradeStart)+'</td><td>'+fmtClock(tradeEnd)+'</td></tr>';
+    $('tbl-trades').innerHTML = tradeRowHtml;
+    $('tl-tbl-trades').innerHTML = tradeRowHtml;
+
+    const rows = ticks.slice(0, 6);
+    const marketRowsHtml = rows.map(tk=>
+      '<tr><td>RELIANCE.NS</td><td>'+fmtClock(tk.t)+'</td><td>'+tk.price.toFixed(2)+'</td></tr>'
+    ).join('');
+    $('tbl-market').innerHTML = marketRowsHtml;
+    $('tl-tbl-market').innerHTML = marketRowsHtml;
+
+    $('mkt-row-tag').textContent = ticks.length+' rows total';
+    $('mkt-more').textContent = ticks.length>6 ? ('… '+(ticks.length-6)+' more rows in market_data') : '';
+    $('tl-mkt-tag').textContent = ticks.length+' rows total';
+    $('tl-mkt-more').textContent = ticks.length>6 ? ('… '+(ticks.length-6)+' more rows in market_data') : '';
+    $('tl-mkt-count').textContent = ticks.length;
+  }
+
+  function renderTimeline(){
+    const axis = $('axis');
+    axis.innerHTML = '';
+    const steps = 6;
+    for(let i=0;i<=steps;i++){
+      const s = document.createElement('span');
+      s.textContent = fmtClock(timelineLen*i/steps);
+      axis.appendChild(s);
+    }
+
+    const row = $('buckets-row');
+    row.innerHTML = '';
+    buckets.forEach(b=>{
+      const el = document.createElement('div');
+      el.className = 'bucket';
+      el.dataset.id = b.id;
+      el.title = 'bucket '+b.id+' ['+fmtClock(b.start)+'–'+fmtClock(b.end)+']  count='+b.count+(b.count?'  min='+b.min+' max='+b.max:'');
+      const fillH = b.count ? Math.min(100, 20 + b.count*4) : 8;
+      el.innerHTML = '<div class="count-lbl">'+b.count+'</div><div class="fill" style="height:'+fillH+'%"></div>';
+      row.appendChild(el);
+    });
+
+    // trade window overlay
+    tradeStart = parseInt($('in-start').value);
+    tradeEnd = parseInt($('in-end').value);
+    const pctStart = 100*tradeStart/timelineLen;
+    const pctEnd = 100*tradeEnd/timelineLen;
+    const tw = $('trade-window');
+    tw.style.left = pctStart+'%';
+    tw.style.width = Math.max(0.3,(pctEnd-pctStart))+'%';
+    tw.innerHTML = '<div class="handle" style="left:0"></div><div class="handle" style="right:0"></div>';
+
+    // tick dots
+    const track = $('tick-track');
+    track.innerHTML = '';
+    ticks.forEach((tk,idx)=>{
+      const dot = document.createElement('div');
+      dot.className = 'tick-dot';
+      dot.dataset.idx = idx;
+      dot.style.left = (100*tk.t/timelineLen)+'%';
+      dot.title = 'transaction_time '+fmtClock(tk.t)+' → price '+tk.price;
+      track.appendChild(dot);
+    });
+  }
+
+  function resetStages(){
+    currentStage = -1;
+    document.querySelectorAll('.stage').forEach(s=>{s.classList.remove('active','done');});
+    document.querySelectorAll('.bucket').forEach(b=>{b.classList.remove('touched','full','boundary','scanned-out');});
+    document.querySelectorAll('.tick-dot').forEach(d=>{d.classList.remove('included','excluded');});
+    $('narration').innerHTML = 'Two tables above: <b>trades</b> (one row, T-1001) and <b>market_data</b> ('+ticks.length+' rows). Hit <b>Next stage →</b> to watch how the join between them executes bucket by bucket, without scanning all '+ticks.length+' market_data rows.';
+    ['res-count','res-min','res-max','res-first'].forEach(id=>$(id).textContent='—');
+    $('res-marker').textContent = '—';
+    $('bar-naive').style.width='0%'; $('bar-bucketed').style.width='0%';
+    $('val-naive').textContent='0'; $('val-bucketed').textContent='0';
+    $('derivation').innerHTML = '<div class="derivation-empty">Press <b>Next stage →</b> in the toolbar above — each step\'s arithmetic will appear here as it runs.</div>';
+    document.querySelectorAll('.toolbar .dot').forEach(d=>d.classList.remove('active','done'));
+    $('tb-stage-n').textContent = '–';
+    $('stage-pos').textContent = 'not started';
+    $('stage-sql-box').innerHTML = 'Run a stage to see its SQL here.';
+    $('stage-explain').innerHTML = 'Load an example above, then press <b>Next stage →</b> to see the explanation for each step here.';
+    $('stage-out-table').innerHTML = '';
+    $('stage-out-empty').style.display = 'block';
+    $('out-caption').textContent = 'Intermediate result table';
+    updateCaseLive();
+  }
+
+  function addDerivation(tag, html){
+    const box = $('derivation');
+    const empty = box.querySelector('.derivation-empty');
+    if(empty) empty.remove();
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = '<div class="tag">'+tag+'</div><div class="math">'+html+'</div>';
+    box.appendChild(row);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function classifyCase(sB, eB){
+    const fullBuckets = eB - sB - 1;
+    if(sB===eB) return 'single';
+    if(fullBuckets<=0) return 'straddle';
+    return 'multi';
+  }
+
+  function updateCaseLive(){
+    const sB = startBucket(), eB = endBucket();
+    const c = classifyCase(sB, eB);
+    document.querySelectorAll('.case-card').forEach(el=>{
+      el.classList.toggle('match', el.dataset.case===c);
+    });
+    const fullN = Math.max(0, eB-sB-1);
+    const labels = {
+      single: 'Trade window is <b>'+(tradeEnd-tradeStart)+'s</b>, bucket size is <b>'+bucketSize+'s</b> — window fits inside a single bucket (bucket '+sB+'). <b>0 full buckets</b>, 1 boundary bucket scanned in full.',
+      straddle: 'Trade window is <b>'+(tradeEnd-tradeStart)+'s</b> vs bucket size <b>'+bucketSize+'s</b> — window crosses one edge without fully swallowing any bucket. Buckets '+sB+' and '+eB+' touched, <b>0 full buckets</b>, both scanned.',
+      multi: 'Trade window is <b>'+(tradeEnd-tradeStart)+'s</b> vs bucket size <b>'+bucketSize+'s</b> — buckets '+(sB+1)+'–'+(eB-1)+' ('+fullN+' bucket'+(fullN===1?'':'s')+') sit entirely inside the window and are trusted with zero scanning. Only buckets '+sB+' and '+eB+' are scanned.'
+    };
+    $('case-live').innerHTML = labels[c];
+  }
+
+  // ---------- Preloaded walkthrough cases ----------
+  const PRESETS = [
+    { key:'single', name:'Window inside 1 bucket', desc:'5-min buckets, 1-min window. start_bucket = end_bucket.',
+      timeline:10, bucket:300, density:50, start:150, end:210, seed:11 },
+    { key:'straddle', name:'Window straddles an edge', desc:'Small window crosses exactly one bucket boundary. Still 0 full buckets.',
+      timeline:10, bucket:300, density:50, start:280, end:330, seed:22 },
+    { key:'multi', name:'Several full buckets', desc:'1-min buckets, 5-min window — the main case the trick is built for.',
+      timeline:10, bucket:60, density:40, start:90, end:390, seed:33 },
+    { key:'empty', name:'No market data (gap)', desc:'Trade window falls entirely in a quiet period — tests the NO_MARKET_DATA marker.',
+      timeline:10, bucket:60, density:40, start:220, end:260, seed:44, gap:[200,280] },
+    { key:'wide', name:'Wide window, heavy savings', desc:'30-sec buckets, window covers most of the timeline — biggest naive-vs-bucketed gap.',
+      timeline:10, bucket:30, density:60, start:40, end:560, seed:55 },
+  ];
+
+  function renderPresets(){
+    const grid = $('preset-grid');
+    grid.innerHTML = '';
+    PRESETS.forEach(p=>{
+      const card = document.createElement('div');
+      card.className = 'preset-card';
+      card.dataset.key = p.key;
+      card.innerHTML = '<div class="pt">'+p.name+'</div><div class="pd">'+p.desc+'</div><div class="pn">bucket '+p.bucket+'s · window '+(p.end-p.start)+'s → click to load, then hit Next</div>';
+      card.addEventListener('click', ()=>loadPreset(p));
+      grid.appendChild(card);
+    });
+  }
+
+  function loadPreset(p){
+    $('in-timeline').value = p.timeline;
+    $('in-bucket').value = p.bucket;
+    $('in-density').value = p.density;
+    $('in-start').value = p.start;
+    $('in-end').value = p.end;
+    document.querySelectorAll('.preset-card').forEach(el=>el.classList.toggle('active', el.dataset.key===p.key));
+    generateData(p.seed, p.gap);
+    $('narration').innerHTML = '<b>Example loaded.</b> Data and trade window are set up — nothing computed yet. Press <b>Next stage →</b> (or click Stage 0 below) to start walking through it.';
+    $('panel-timeline').scrollIntoView({behavior:'smooth', block:'start'});
+  }
+
+  // clicking a CASE card jumps to a preset that demonstrates it
+  document.addEventListener('DOMContentLoaded', ()=>{});
+  function wireCaseCards(){
+    document.querySelectorAll('.case-card').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const preset = PRESETS.find(p=>p.key===el.dataset.case) || PRESETS.find(p=>p.key==='multi');
+        loadPreset(preset);
+      });
+    });
+  }
+
+  // ---------- SQL per stage ----------
+  const STAGE_SQL = {
+    0:
+`<span class="cm">-- runs once, ahead of any trade</span>
+<span class="kw">SELECT</span> sym, <span class="fn">FLOOR</span>(transaction_time/:bucket_size) <span class="kw">AS</span> bucket_id,
+       <span class="fn">COUNT</span>(*) <span class="kw">AS</span> bucket_count,
+       <span class="fn">MIN</span>(price) <span class="kw">AS</span> bucket_min,
+       <span class="fn">MAX</span>(price) <span class="kw">AS</span> bucket_max
+<span class="kw">FROM</span> market_data
+<span class="kw">GROUP BY</span> sym, <span class="fn">FLOOR</span>(transaction_time/:bucket_size)`,
+    1:
+`<span class="kw">SELECT</span> trade_id, sym, start_time, end_time,
+       <span class="fn">FLOOR</span>(start_time/:bucket_size) <span class="kw">AS</span> start_bucket,
+       <span class="fn">FLOOR</span>(end_time/:bucket_size)   <span class="kw">AS</span> end_bucket
+<span class="kw">FROM</span> trades
+<span class="kw">WHERE</span> trade_id = <span class="cm">'T-1001'</span>`,
+    2:
+`<span class="kw">SELECT</span> tb.trade_id,
+       <span class="fn">SUM</span>(b.bucket_count) <span class="kw">AS</span> full_count,
+       <span class="fn">MIN</span>(b.bucket_min)   <span class="kw">AS</span> full_min,
+       <span class="fn">MAX</span>(b.bucket_max)   <span class="kw">AS</span> full_max
+<span class="kw">FROM</span> trade_buckets tb
+<span class="kw">JOIN</span> market_data_buckets b
+  <span class="kw">ON</span> b.sym = tb.sym
+ <span class="kw">AND</span> b.bucket_id <span class="kw">&gt;</span> tb.start_bucket
+ <span class="kw">AND</span> b.bucket_id <span class="kw">&lt;</span> tb.end_bucket
+<span class="kw">GROUP BY</span> tb.trade_id`,
+    3:
+`<span class="kw">SELECT</span> tb.trade_id,
+       <span class="fn">COUNT</span>(*) <span class="kw">AS</span> boundary_count,
+       <span class="fn">MIN</span>(m.price) <span class="kw">AS</span> boundary_min,
+       <span class="fn">MAX</span>(m.price) <span class="kw">AS</span> boundary_max
+<span class="kw">FROM</span> trade_buckets tb
+<span class="kw">JOIN</span> market_data m
+  <span class="kw">ON</span> m.sym = tb.sym
+ <span class="kw">AND</span> <span class="fn">FLOOR</span>(m.transaction_time/:bucket_size)
+       <span class="kw">IN</span> (tb.start_bucket, tb.end_bucket)
+ <span class="kw">AND</span> m.transaction_time
+       <span class="kw">BETWEEN</span> tb.start_time <span class="kw">AND</span> tb.end_time
+<span class="kw">GROUP BY</span> tb.trade_id`,
+    4:
+`<span class="kw">SELECT</span> tb.trade_id,
+       <span class="fn">COALESCE</span>(f.full_count,0)+<span class="fn">COALESCE</span>(b.boundary_count,0) <span class="kw">AS</span> row_count,
+       <span class="fn">LEAST</span>(f.full_min, b.boundary_min)     <span class="kw">AS</span> min_price,
+       <span class="fn">GREATEST</span>(f.full_max, b.boundary_max) <span class="kw">AS</span> max_price
+<span class="kw">FROM</span> trade_buckets tb
+<span class="kw">LEFT JOIN</span> full_agg f     <span class="kw">ON</span> f.trade_id=tb.trade_id
+<span class="kw">LEFT JOIN</span> boundary_agg b <span class="kw">ON</span> b.trade_id=tb.trade_id`
+  };
+
+  const STAGE_SQL_HLL = {
+    0:
+`<span class="cm">-- runs once, ahead of any trade</span>
+<span class="kw">SELECT</span> sym, <span class="fn">FLOOR</span>(transaction_time/:bucket_size) <span class="kw">AS</span> bucket_id,
+       <span class="fn">COUNT</span>(*) <span class="kw">AS</span> bucket_count,
+       <span class="fn">MIN</span>(price) <span class="kw">AS</span> bucket_min,
+       <span class="fn">MAX</span>(price) <span class="kw">AS</span> bucket_max,
+       <span class="fn">hll_sketch_agg</span>(price) <span class="kw">AS</span> bucket_price_sketch
+<span class="kw">FROM</span> market_data
+<span class="kw">GROUP BY</span> sym, <span class="fn">FLOOR</span>(transaction_time/:bucket_size)`,
+    2:
+`<span class="kw">SELECT</span> tb.trade_id,
+       <span class="fn">SUM</span>(b.bucket_count) <span class="kw">AS</span> full_count,
+       <span class="fn">MIN</span>(b.bucket_min)   <span class="kw">AS</span> full_min,
+       <span class="fn">MAX</span>(b.bucket_max)   <span class="kw">AS</span> full_max,
+       <span class="fn">hll_union_agg</span>(b.bucket_price_sketch) <span class="kw">AS</span> full_price_sketch
+<span class="kw">FROM</span> trade_buckets tb
+<span class="kw">JOIN</span> market_data_buckets b
+  <span class="kw">ON</span> b.sym = tb.sym
+ <span class="kw">AND</span> b.bucket_id <span class="kw">&gt;</span> tb.start_bucket
+ <span class="kw">AND</span> b.bucket_id <span class="kw">&lt;</span> tb.end_bucket
+<span class="kw">GROUP BY</span> tb.trade_id`,
+    3:
+`<span class="kw">SELECT</span> tb.trade_id,
+       <span class="fn">COUNT</span>(*) <span class="kw">AS</span> boundary_count,
+       <span class="fn">MIN</span>(m.price) <span class="kw">AS</span> boundary_min,
+       <span class="fn">MAX</span>(m.price) <span class="kw">AS</span> boundary_max,
+       <span class="fn">hll_sketch_agg</span>(m.price) <span class="kw">AS</span> boundary_price_sketch
+<span class="kw">FROM</span> trade_buckets tb
+<span class="kw">JOIN</span> market_data m
+  <span class="kw">ON</span> m.sym = tb.sym
+ <span class="kw">AND</span> <span class="fn">FLOOR</span>(m.transaction_time/:bucket_size)
+       <span class="kw">IN</span> (tb.start_bucket, tb.end_bucket)
+ <span class="kw">AND</span> m.transaction_time
+       <span class="kw">BETWEEN</span> tb.start_time <span class="kw">AND</span> tb.end_time
+<span class="kw">GROUP BY</span> tb.trade_id`,
+    4:
+`<span class="kw">SELECT</span> tb.trade_id,
+       <span class="fn">COALESCE</span>(f.full_count,0)+<span class="fn">COALESCE</span>(b.boundary_count,0) <span class="kw">AS</span> row_count,
+       <span class="fn">LEAST</span>(f.full_min, b.boundary_min)     <span class="kw">AS</span> min_price,
+       <span class="fn">GREATEST</span>(f.full_max, b.boundary_max) <span class="kw">AS</span> max_price,
+       <span class="fn">hll_sketch_estimate</span>(
+         <span class="fn">hll_union</span>(f.full_price_sketch, b.boundary_price_sketch)
+       ) <span class="kw">AS</span> approx_distinct_prices
+<span class="kw">FROM</span> trade_buckets tb
+<span class="kw">LEFT JOIN</span> full_agg f     <span class="kw">ON</span> f.trade_id=tb.trade_id
+<span class="kw">LEFT JOIN</span> boundary_agg b <span class="kw">ON</span> b.trade_id=tb.trade_id`
+  };
+
+  function renderStageSQL(n){
+    const useHll = $('in-distinct').checked;
+    const sql = (useHll && STAGE_SQL_HLL[n]) ? STAGE_SQL_HLL[n] : STAGE_SQL[n];
+    $('stage-sql-box').innerHTML = sql || 'Run a stage to see its SQL here.';
+  }
+
+  // ---------- Stage output tables ----------
+  function renderStageOutput(n, sB, eB){
+    const empty = $('stage-out-empty');
+    const box = $('stage-out-table');
+    empty.style.display = 'none';
+    box.innerHTML = '';
+
+    if(n===0){
+      $('out-caption').textContent = 'market_data_buckets (pre-aggregated, first 8 rows)';
+      let rows = buckets.slice(0,8).map(b=>
+        '<tr><td>'+b.id+'</td><td>'+fmtClock(b.start)+'</td><td>'+b.count+'</td><td>'+(b.count?b.min.toFixed(2):'—')+'</td><td>'+(b.count?b.max.toFixed(2):'—')+'</td></tr>'
+      ).join('');
+      box.innerHTML = '<table class="out-table"><thead><tr><th>bucket_id</th><th>start</th><th>count</th><th>min</th><th>max</th></tr></thead><tbody>'+rows+'</tbody></table>'
+        + (buckets.length>8 ? '<div class="out-caption">… '+(buckets.length-8)+' more buckets</div>' : '');
+    }
+
+    if(n===1){
+      $('out-caption').textContent = 'trade_buckets (derived from trades)';
+      box.innerHTML = '<table class="out-table"><thead><tr><th>trade_id</th><th>start_time</th><th>end_time</th><th>start_bucket</th><th>end_bucket</th></tr></thead><tbody>'+
+        '<tr><td>T-1001</td><td>'+fmtClock(tradeStart)+'</td><td>'+fmtClock(tradeEnd)+'</td><td>'+sB+'</td><td>'+eB+'</td></tr>'+
+        '</tbody></table>';
+    }
+
+    const showDistinct = $('in-distinct').checked;
+
+    if(n===2){
+      $('out-caption').textContent = 'full_agg output' + (showDistinct ? ' (+ HLL sketch merge)' : '');
+      const fullIds = [];
+      buckets.forEach(b=>{ if(b.id>sB && b.id<eB) fullIds.push(b); });
+      if(fullIds.length===0){
+        box.innerHTML = '<div class="out-empty">No buckets strictly between '+sB+' and '+eB+' — full_agg produces zero rows for this trade.</div>';
+      } else {
+        const distinctCol = showDistinct ? '<th>distinct_sketch</th>' : '';
+        let rows = fullIds.map(b=>'<tr><td>'+b.id+'</td><td>'+b.count+'</td><td>'+(b.count?b.min.toFixed(2):'—')+'</td><td>'+(b.count?b.max.toFixed(2):'—')+'</td>'+(showDistinct?'<td>'+b.distinctPrices.size+' distinct</td>':'')+'</tr>').join('');
+        const fc = fullIds.reduce((s,b)=>s+b.count,0);
+        const fmin = Math.min(...fullIds.filter(b=>b.count).map(b=>b.min));
+        const fmax = Math.max(...fullIds.filter(b=>b.count).map(b=>b.max));
+        const mergedSet = new Set(); fullIds.forEach(b=>b.distinctPrices.forEach(p=>mergedSet.add(p)));
+        rows += '<tr class="total"><td>full_agg →</td><td>'+fc+'</td><td>'+(isFinite(fmin)?fmin.toFixed(2):'—')+'</td><td>'+(isFinite(fmax)?fmax.toFixed(2):'—')+'</td>'+(showDistinct?'<td>~'+mergedSet.size+' (union)</td>':'')+'</tr>';
+        box.innerHTML = '<table class="out-table"><thead><tr><th>bucket_id</th><th>count</th><th>min</th><th>max</th>'+distinctCol+'</tr></thead><tbody>'+rows+'</tbody></table>';
+      }
+    }
+
+    if(n===3){
+      $('out-caption').textContent = 'boundary_agg raw rows scanned' + (showDistinct ? ' (+ sketch built fresh)' : '');
+      let rows = [];
+      buckets.forEach(b=>{
+        if(b.id===sB || b.id===eB){
+          b.ticks.forEach(tk=>{
+            const inRange = tk.t>=tradeStart && tk.t<=tradeEnd;
+            rows.push('<tr class="'+(inRange?'included':'excluded')+'"><td>'+b.id+'</td><td>'+fmtClock(tk.t)+'</td><td>'+tk.price.toFixed(2)+'</td><td>'+(inRange?'kept':'excluded')+'</td></tr>');
+          });
+        }
+      });
+      if(rows.length===0){
+        box.innerHTML = '<div class="out-empty">No market_data rows fall in the boundary bucket(s) at all.</div>';
+      } else {
+        box.innerHTML = '<table class="out-table"><thead><tr><th>bucket</th><th>transaction_time</th><th>price</th><th>status</th></tr></thead><tbody>'+rows.join('')+'</tbody></table>';
+      }
+    }
+
+    if(n===4){
+      $('out-caption').textContent = 'Final combined output row';
+      const result = computeResult(sB,eB);
+      const distinctTh = showDistinct ? '<th>approx_distinct_prices</th>' : '';
+      const distinctTd = showDistinct ? '<td>~'+result.distinctCount+'</td>' : '';
+      box.innerHTML = '<table class="out-table"><thead><tr><th>trade_id</th><th>row_count</th><th>min_price</th><th>max_price</th><th>first_price</th>'+distinctTh+'<th>marker</th></tr></thead><tbody>'+
+        '<tr class="total"><td>T-1001</td><td>'+result.count+'</td><td>'+(result.count?result.min.toFixed(2):'—')+'</td><td>'+(result.count?result.max.toFixed(2):'—')+'</td><td>'+(result.count?result.firstPrice.toFixed(2):'—')+'</td>'+distinctTd+'<td>'+(result.count?'MATCHED':'NO_MARKET_DATA')+'</td></tr>'+
+        '</tbody></table>';
+
+      if(showDistinct){
+        $('res-distinct-card').style.display = '';
+        $('res-distinct').textContent = result.count ? ('~'+result.distinctCount) : '—';
+      } else {
+        $('res-distinct-card').style.display = 'none';
+      }
+    }
+  }
+
+  function autoScrollToTimeline(){
+    if($('in-autoscroll').checked){
+      $('panel-timeline').scrollIntoView({behavior:'smooth', block:'start'});
+    }
+  }
+
+
+  function setStage(n){
+    document.querySelectorAll('.stage').forEach(s=>{
+      const idx = parseInt(s.dataset.stage);
+      s.classList.toggle('active', idx===n);
+      s.classList.toggle('done', idx<n);
+    });
+    document.querySelectorAll('.toolbar .dot').forEach(d=>{
+      const idx = parseInt(d.dataset.d);
+      d.classList.toggle('active', idx===n);
+      d.classList.toggle('done', idx<n);
+    });
+    $('tb-stage-n').textContent = n;
+    $('stage-pos').textContent = 'Stage '+n+' of 4';
+    currentStage = n;
+  }
+
+  function goToStage(n){
+    n = Math.max(0, Math.min(4, n));
+    document.querySelectorAll('.bucket').forEach(b=>b.classList.remove('touched','full','boundary','scanned-out'));
+    document.querySelectorAll('.tick-dot').forEach(d=>d.classList.remove('included','excluded'));
+    $('derivation').innerHTML = '';
+    for(let i=0;i<=n;i++){ runStage(i); }
+    autoScrollToTimeline();
+  }
+
+  function stepForward(){
+    if(currentStage>=4) return;
+    goToStage(currentStage+1);
+  }
+
+  function stepBack(){
+    if(currentStage<=0){
+      if(currentStage===0){ resetStages(); }
+      return;
+    }
+    goToStage(currentStage-1);
+  }
+
+  function startBucket(){ return Math.floor(tradeStart/bucketSize); }
+  function endBucket(){ return Math.floor(tradeEnd/bucketSize); }
+
+  function runStage(n){
+    setStage(n);
+    const sB = startBucket(), eB = endBucket();
+    const narr = $('narration');
+    renderStageSQL(n);
+
+    if(n===0){
+      narr.innerHTML = '<b>Stage 0 — Pre-aggregate market_data.</b> <code>GROUP BY sym, FLOOR(transaction_time/bucket_size)</code> runs once, ahead of any trade. Each bucket already knows its own count/min/max/first price. This never re-runs per trade.';
+      document.querySelectorAll('.bucket').forEach(b=>b.style.opacity=1);
+      addDerivation('STAGE 0', buckets.length+' buckets pre-aggregated across the timeline (bucket size = '+bucketSize+'s). Each has count/min/max/first ready — computed once, reused for every trade.');
+    }
+
+    if(n===1){
+      narr.innerHTML = '<b>Stage 1 — Locate window.</b> This trade\'s <code>start_time</code>='+fmtClock(tradeStart)+' and <code>end_time</code>='+fmtClock(tradeEnd)+' fall in bucket '+sB+' through bucket '+eB+' — computed with one <code>FLOOR()</code> each, no scanning of market_data yet.';
+      document.querySelectorAll('.bucket').forEach(el=>{
+        const id = parseInt(el.dataset.id);
+        if(id>=sB && id<=eB) el.classList.add('touched');
+      });
+      addDerivation('STAGE 1', 'start_bucket = FLOOR('+fmtClock(tradeStart)+' <span class="op">/</span> '+bucketSize+'s) <span class="eq">=</span> '+sB+' &nbsp;·&nbsp; end_bucket = FLOOR('+fmtClock(tradeEnd)+' <span class="op">/</span> '+bucketSize+'s) <span class="eq">=</span> '+eB);
+    }
+
+    if(n===2){
+      let fullCount=0, fullMin=null, fullMax=null, fullIds=[];
+      document.querySelectorAll('.bucket').forEach(el=>{
+        const id = parseInt(el.dataset.id);
+        if(id>sB && id<eB){
+          el.classList.add('full'); el.classList.remove('touched');
+          fullCount += buckets[id].count; fullIds.push(id);
+          if(buckets[id].count){
+            if(fullMin===null||buckets[id].min<fullMin) fullMin=buckets[id].min;
+            if(fullMax===null||buckets[id].max>fullMax) fullMax=buckets[id].max;
+          }
+        }
+      });
+      if(fullIds.length===0){
+        narr.innerHTML = '<b>Stage 2 — Trust full buckets.</b> No bucket sits strictly between bucket '+sB+' and bucket '+eB+' — the window is narrower than one bucket, or straddles just one edge. Nothing to trust here; everything falls to Stage 3.';
+        addDerivation('STAGE 2', '<span class="op">0 full buckets</span> — window too narrow relative to bucket size '+bucketSize+'s. full_count = 0. (See the CASES panel above.)');
+      } else {
+        narr.innerHTML = '<b>Stage 2 — Trust full buckets.</b> Buckets strictly between the two edges are entirely inside <code>[start_time, end_time]</code> — every market_data row in them qualifies automatically. Pull their pre-computed min/max/count directly. '+fullCount+' market_data rows accounted for, zero of them scanned.';
+        addDerivation('STAGE 2', 'full buckets = {'+fullIds.join(', ')+'} &nbsp;→&nbsp; full_count <span class="eq">=</span> '+fullIds.map(id=>buckets[id].count).join(' + ')+' <span class="eq">= '+fullCount+'</span> &nbsp;·&nbsp; full_min <span class="eq">='+(fullMin!==null?fullMin.toFixed(2):'—')+'</span> &nbsp;·&nbsp; full_max <span class="eq">='+(fullMax!==null?fullMax.toFixed(2):'—')+'</span> — read straight from pre-agg, 0 rows scanned.');
+        if($('in-distinct').checked){
+          addDerivation('STAGE 2 · HLL', 'hll_union_agg(bucket_price_sketch) across buckets {'+fullIds.join(', ')+'} &nbsp;→&nbsp; one merged sketch, no double-counting of a price seen in two different buckets.');
+        }
+      }
+    }
+
+    if(n===3){
+      document.querySelectorAll('.bucket').forEach(el=>{
+        const id = parseInt(el.dataset.id);
+        if(id===sB || id===eB){ el.classList.add('boundary'); el.classList.remove('touched'); }
+      });
+      let scanned=0, kept=0;
+      ticks.forEach((tk,idx)=>{
+        const bid = Math.min(buckets.length-1, Math.floor(tk.t/bucketSize));
+        const dot = document.querySelector('.tick-dot[data-idx="'+idx+'"]');
+        if(bid===sB || bid===eB){
+          scanned++;
+          const inRange = tk.t>=tradeStart && tk.t<=tradeEnd;
+          if(inRange) kept++;
+          dot.classList.add(inRange?'included':'excluded');
+        }
+      });
+      const edgeLabel = sB===eB ? ('bucket '+sB+' (start and end share the same bucket)') : ('bucket '+sB+' and bucket '+eB);
+      narr.innerHTML = '<b>Stage 3 — Scan boundaries.</b> Only market_data rows tagged '+edgeLabel+' get read at all — every other bucket\'s rows are never touched. Within just those, each row\'s exact <code>transaction_time</code> is checked against <code>BETWEEN start_time AND end_time</code>. '+scanned+' rows touched here.';
+      addDerivation('STAGE 3', 'rows in edge bucket(s) = '+scanned+' &nbsp;→&nbsp; filter each by transaction_time <span class="eq">∈</span> ['+fmtClock(tradeStart)+', '+fmtClock(tradeEnd)+'] &nbsp;→&nbsp; boundary_count <span class="eq">= '+kept+'</span> (rejected '+(scanned-kept)+')');
+      if($('in-distinct').checked){
+        addDerivation('STAGE 3 · HLL', 'hll_sketch_agg(price) built fresh from the '+kept+' kept boundary rows — same function used in Stage 0\'s pre-agg, just run on this small filtered set instead.');
+      }
+    }
+
+    if(n===4){
+      const result = computeResult(sB,eB);
+      $('res-count').textContent = result.count;
+      $('res-min').textContent = result.count? result.min.toFixed(2) : '—';
+      $('res-max').textContent = result.count? result.max.toFixed(2) : '—';
+      $('res-first').textContent = result.count? result.firstPrice.toFixed(2) : '—';
+      $('res-first-sub').textContent = result.count? ('@ '+fmtClock(result.firstT)) : 'no market data';
+      $('res-marker').textContent = result.count? 'MATCHED' : 'NO_MARKET_DATA';
+      $('res-marker').style.color = result.count? 'var(--cyan)' : 'var(--rose)';
+
+      // cost comparison
+      const naiveScanned = ticks.filter(t=>t.t>=buckets[sB].start).length; // roughly: naive scans from window start onward in unsorted-file worst case; use full ticks before window end as proxy
+      const naiveApprox = ticks.filter(t=> t.t <= tradeEnd).length; // rows a naive unindexed scan up to end would touch, worst case whole table
+      const bucketedScanned = boundaryRowsScanned(sB,eB);
+      const naiveTotal = ticks.length; // worst case: full table scan, no pruning at all
+      const maxBar = Math.max(naiveTotal, bucketedScanned, 1);
+      $('bar-naive').style.width = (100*naiveTotal/maxBar)+'%';
+      $('bar-bucketed').style.width = (100*bucketedScanned/maxBar)+'%';
+      $('val-naive').textContent = naiveTotal+' rows';
+      $('val-bucketed').textContent = bucketedScanned+' rows';
+
+      narr.innerHTML = '<b>Stage 4 — Combine.</b> Full-bucket totals (Stage 2) + boundary scan results (Stage 3) are merged into one output row for <code>trade_id T-1001</code>. Bucketed approach touched '+bucketedScanned+' market_data rows instead of scanning all '+naiveTotal+'.';
+      addDerivation('STAGE 4', 'row_count <span class="eq">=</span> full_count + boundary_count &nbsp;·&nbsp; min_price <span class="eq">=</span> LEAST(full_min, boundary_min) &nbsp;·&nbsp; max_price <span class="eq">=</span> GREATEST(full_max, boundary_max) &nbsp;→&nbsp; <b>'+result.count+' rows, min '+(result.count?result.min.toFixed(2):'—')+', max '+(result.count?result.max.toFixed(2):'—')+'</b>');
+      if($('in-distinct').checked){
+        addDerivation('STAGE 4 · HLL', 'hll_union(full_price_sketch, boundary_price_sketch) &nbsp;→&nbsp; hll_sketch_estimate(...) &nbsp;→&nbsp; <b>~'+result.distinctCount+' distinct prices</b> (exact here since the demo dataset is small; production sees ~1-2% error from the sketch).');
+      }
+    }
+
+    $('stage-explain').innerHTML = narr.innerHTML;
+    renderStageOutput(n, sB, eB);
+  }
+
+  function boundaryRowsScanned(sB,eB){
+    let n=0;
+    buckets.forEach(b=>{ if(b.id===sB||b.id===eB) n+=b.count; });
+    return n;
+  }
+
+  function computeResult(sB,eB){
+    let count=0,min=null,max=null,firstT=null,firstPrice=null;
+    const distinctSet = new Set();
+    // full buckets
+    buckets.forEach(b=>{
+      if(b.id>sB && b.id<eB && b.count){
+        count+=b.count;
+        if(min===null||b.min<min) min=b.min;
+        if(max===null||b.max>max) max=b.max;
+        if(firstT===null||b.firstT<firstT){firstT=b.firstT; firstPrice=b.firstPrice;}
+        b.distinctPrices.forEach(p=>distinctSet.add(p));
+      }
+    });
+    // boundary buckets, exact filter
+    buckets.forEach(b=>{
+      if(b.id===sB || b.id===eB){
+        b.ticks.forEach(tk=>{
+          if(tk.t>=tradeStart && tk.t<=tradeEnd){
+            count++;
+            if(min===null||tk.price<min) min=tk.price;
+            if(max===null||tk.price>max) max=tk.price;
+            if(firstT===null||tk.t<firstT){firstT=tk.t; firstPrice=tk.price;}
+            distinctSet.add(tk.price);
+          }
+        });
+      }
+    });
+    return {count,min,max,firstT,firstPrice,distinctCount:distinctSet.size};
+  }
+
+  async function runAll(){
+    if(running) return;
+    running = true;
+    const delay = Math.max(100, parseInt($('in-delay').value) || 750);
+    $('btn-run').disabled = true; $('btn-step').disabled = true; $('btn-generate').disabled = true;
+    $('btn-prev').disabled = true; $('btn-prev-inline').disabled = true; $('btn-next-inline').disabled = true;
+    resetStages();
+    for(let i=0;i<=4;i++){
+      await new Promise(r=>setTimeout(r, delay));
+      runStage(i);
+      autoScrollToTimeline();
+    }
+    running = false;
+    $('btn-run').disabled = false; $('btn-step').disabled = false; $('btn-generate').disabled = false;
+    $('btn-prev').disabled = false; $('btn-prev-inline').disabled = false; $('btn-next-inline').disabled = false;
+  }
+
+  function exportResult(){
+    const sB = startBucket(), eB = endBucket();
+    const result = computeResult(sB, eB);
+    const payload = {
+      trade: { trade_id:'T-1001', sym:'RELIANCE.NS', start_time: fmtClock(tradeStart), end_time: fmtClock(tradeEnd) },
+      bucket_size_sec: bucketSize,
+      buckets_touched: { start_bucket: sB, end_bucket: eB, full_bucket_count: Math.max(0, eB-sB-1) },
+      case: classifyCase(sB, eB),
+      result: {
+        row_count: result.count,
+        min_price: result.count ? result.min : null,
+        max_price: result.count ? result.max : null,
+        first_price: result.count ? result.firstPrice : null,
+        first_time: result.count ? fmtClock(result.firstT) : null,
+        approx_distinct_prices: ($('in-distinct').checked && result.count) ? result.distinctCount : null,
+        marker: result.count ? 'MATCHED' : 'NO_MARKET_DATA'
+      },
+      cost: {
+        naive_rows_scanned: ticks.length,
+        bucketed_rows_scanned: boundaryRowsScanned(sB, eB)
+      },
+      sql: "SELECT t.trade_id, COUNT(*) AS row_count, MIN(m.price) AS min_price, MAX(m.price) AS max_price, MIN_BY(m.price, m.transaction_time) AS first_price FROM trades t JOIN market_data m ON m.sym = t.sym AND m.transaction_time BETWEEN t.start_time AND t.end_time WHERE t.trade_id = 'T-1001' GROUP BY t.trade_id"
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'range-join-result-T-1001.json';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  $('btn-generate').addEventListener('click', ()=>generateData());
+  $('btn-run').addEventListener('click', runAll);
+  $('btn-step').addEventListener('click', stepForward);
+  $('btn-prev').addEventListener('click', stepBack);
+  $('btn-next-inline').addEventListener('click', stepForward);
+  $('btn-prev-inline').addEventListener('click', stepBack);
+  $('btn-reset').addEventListener('click', ()=>{ renderTimeline(); resetStages(); });
+  $('btn-export').addEventListener('click', exportResult);
+  $('in-distinct').addEventListener('change', ()=>{
+    if(currentStage>=0){ renderStageSQL(currentStage); renderStageOutput(currentStage, startBucket(), endBucket()); }
+  });
+  document.querySelectorAll('.stage').forEach(el=>{
+    el.addEventListener('click', ()=>{ if(!running) goToStage(parseInt(el.dataset.stage)); });
+  });
+  ['in-start','in-end'].forEach(id=>{
+    $(id).addEventListener('input', ()=>{ if(!running){ renderTimeline(); renderTables(); resetStages(); } });
+  });
+  ['in-timeline','in-bucket','in-density'].forEach(id=>{
+    $(id).addEventListener('change', ()=>generateData());
+  });
+
+  // ---------- Try it yourself ----------
+  const TRY_ANSWER = { sb:2, eb:8, fb:5 };
+  $('btn-try-check').addEventListener('click', ()=>{
+    const sb = parseInt($('try-sb').value), eb = parseInt($('try-eb').value), fb = parseInt($('try-fb').value);
+    const fb_box = $('try-feedback');
+    const ok = sb===TRY_ANSWER.sb && eb===TRY_ANSWER.eb && fb===TRY_ANSWER.fb;
+    fb_box.className = 'try-feedback ' + (ok ? 'correct' : 'wrong');
+    if(ok){
+      fb_box.innerHTML = 'Correct. start_bucket=2, end_bucket=8, full buckets=5 (buckets 3–7 trusted, buckets 2 and 8 scanned). Hit <b>Load &amp; run this example</b> to watch it happen.';
+    } else {
+      fb_box.innerHTML = 'Not quite. start_bucket = FLOOR(130/45) = <b>2</b>, end_bucket = FLOOR(400/45) = <b>8</b>, full buckets = 8−2−1 = <b>5</b>. Adjust your answers and try again, or load the example to see it worked out live.';
+    }
+  });
+  $('btn-try-load').addEventListener('click', ()=>{
+    $('in-timeline').value = 13;
+    $('in-bucket').value = 45;
+    $('in-density').value = 45;
+    $('in-start').value = 130;
+    $('in-end').value = 400;
+    generateData(99);
+    $('narration').innerHTML = '<b>Example loaded.</b> Data and trade window are set up — nothing computed yet. Press <b>Next stage →</b> (or click Stage 0 below) to start walking through it.';
+    $('panel-timeline').scrollIntoView({behavior:'smooth', block:'start'});
+  });
+
+  renderPresets();
+  wireCaseCards();
+  generateData();
+})();
+</script>
+
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  let symCounts = [];   // [{sym, count, hot:bool}]
+  let shardCounts = []; // [count, count, ...] length N
+  let hotTicks = [];    // sample display rows for the hot sym
+  let otherSampleRow = null;
+  let saltN = 4;
+  let hotCount = 5200;
+  let sCurrentStage = -1;
+  let sRunning = false;
+
+  function mulberry32(seed){
+    return function(){
+      seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const rand = mulberry32(7);
+
+  const OTHER_NAMES = ['TCS.NS','INFY.NS','HDFCBANK.NS','ICICIBANK.NS','SBIN.NS','WIPRO.NS','LT.NS','AXISBANK.NS','MARUTI.NS','ITC.NS'];
+
+  function sGenerateData(){
+    hotCount = parseInt($('s-in-hot').value);
+    const otherAvg = parseInt($('s-in-other').value);
+    const nOther = parseInt($('s-in-nsyms').value);
+    saltN = parseInt($('s-in-saltn').value);
+
+    symCounts = [{sym:'RELIANCE.NS', count:hotCount, hot:true}];
+    for(let i=0;i<nOther;i++){
+      const jitter = 0.7 + rand()*0.6;
+      symCounts.push({sym:OTHER_NAMES[i % OTHER_NAMES.length], count:Math.round(otherAvg*jitter), hot:false});
+    }
+
+    // split hot count into N shards, uneven but summing exactly to hotCount
+    shardCounts = [];
+    let remaining = hotCount;
+    for(let i=0;i<saltN;i++){
+      if(i===saltN-1){ shardCounts.push(remaining); }
+      else{
+        const base = hotCount/saltN;
+        const val = Math.round(base * (0.75 + rand()*0.5));
+        shardCounts.push(val);
+        remaining -= val;
+      }
+    }
+
+    // sample display ticks for hot sym + one other sym row
+    hotTicks = [];
+    let price = 2400 + rand()*40;
+    for(let i=0;i<7;i++){
+      price += (rand()-0.5)*8;
+      hotTicks.push({ t: 9*3600 + i*180 + Math.floor(rand()*60), price: Math.round(price*100)/100 });
+    }
+    otherSampleRow = { sym: symCounts[1] ? symCounts[1].sym : 'TCS.NS', t: 9*3600+400, price: Math.round((3100+rand()*20)*100)/100 };
+
+    $('s-tk-hot').textContent = 'hot sym=RELIANCE.NS';
+    $('s-tk-n').textContent = 'N='+saltN;
+    $('s-tl-mkt-count').textContent = hotCount + symCounts.slice(1).reduce((s,c)=>s+c.count,0);
+    sRenderTables();
+    sResetStages();
+  }
+
+  function fmtClockS(sec){
+    const hh = Math.floor(sec/3600), mm = Math.floor((sec%3600)/60), ss = Math.floor(sec%60);
+    return (hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm+':'+(ss<10?'0':'')+ss;
+  }
+
+  function sRenderTables(){
+    $('s-tl-tbl-trades').innerHTML =
+      '<tr><td class="mono-hi">T-2001</td><td>RELIANCE.NS</td><td>09:15:00</td><td>09:18:00</td></tr>';
+    const rows = hotTicks.slice(0,4).map(tk=>
+      '<tr><td>RELIANCE.NS</td><td>'+fmtClockS(tk.t)+'</td><td>'+tk.price.toFixed(2)+'</td></tr>'
+    ).join('') + '<tr><td>'+otherSampleRow.sym+'</td><td>'+fmtClockS(otherSampleRow.t)+'</td><td>'+otherSampleRow.price.toFixed(2)+'</td></tr>';
+    $('s-tl-tbl-market').innerHTML = rows;
+    $('s-tl-mkt-tag').textContent = (hotCount + symCounts.slice(1).reduce((s,c)=>s+c.count,0)) + ' rows total (sample shown)';
+  }
+
+  function sRenderShardChart(state){
+    const chart = $('shard-chart');
+    chart.innerHTML = '';
+    const maxVal = state==='before' ? Math.max(hotCount, ...symCounts.slice(1).map(c=>c.count))
+                                     : Math.max(...shardCounts, ...symCounts.slice(1).map(c=>c.count));
+    function addBar(label, val, cls){
+      const wrap = document.createElement('div');
+      wrap.className = 'shard-bar-wrap';
+      const h = Math.max(4, Math.round(100*val/maxVal));
+      wrap.innerHTML = '<div class="shard-val">'+val+'</div><div class="shard-bar '+cls+'" style="height:'+h+'%"></div><div class="shard-lbl">'+label+'</div>';
+      chart.appendChild(wrap);
+    }
+    if(state==='before'){
+      addBar('RELIANCE.NS', hotCount, 'hot');
+    } else {
+      shardCounts.forEach((v,i)=> addBar('RELIANCE_'+i, v, 'shard'));
+    }
+    symCounts.slice(1).forEach(c=> addBar(c.sym.replace('.NS',''), c.count, ''));
+  }
+
+  function sSetStage(n){
+    document.querySelectorAll('#s-stages .stage').forEach(s=>{
+      const idx = parseInt(s.dataset.stage);
+      s.classList.toggle('active', idx===n);
+      s.classList.toggle('done', idx<n);
+    });
+    document.querySelectorAll('#s-tb-dots .dot').forEach(d=>{
+      const idx = parseInt(d.dataset.d);
+      d.classList.toggle('active', idx===n);
+      d.classList.toggle('done', idx<n);
+    });
+    $('s-tb-stage-n').textContent = n;
+    $('s-stage-pos').textContent = 'Stage '+n+' of 4';
+    sCurrentStage = n;
+  }
+
+  function sAddDerivation(tag, html){
+    const box = $('s-derivation');
+    const empty = box.querySelector('.derivation-empty');
+    if(empty) empty.remove();
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = '<div class="tag">'+tag+'</div><div class="math">'+html+'</div>';
+    box.appendChild(row);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  const S_SQL = {
+    0:
+`<span class="cm">-- run this on your real market_data first</span>
+<span class="kw">SELECT</span> sym, <span class="fn">COUNT</span>(*) <span class="kw">AS</span> cnt
+<span class="kw">FROM</span> market_data
+<span class="kw">GROUP BY</span> sym
+<span class="kw">ORDER BY</span> cnt <span class="kw">DESC</span>
+<span class="kw">LIMIT</span> 20`,
+    1:
+`<span class="cm">-- N is an operational choice, not a query</span>
+<span class="cm">-- target: hot_count / N ≈ size of your other partitions</span>
+<span class="cm">-- N = </span>CEIL(hot_count / target_partition_size)`,
+    2:
+`<span class="kw">CREATE OR REPLACE TEMP VIEW</span> market_data_salted <span class="kw">AS</span>
+<span class="kw">SELECT</span> *,
+  <span class="kw">CASE WHEN</span> sym <span class="kw">IN</span> (<span class="cm">:hot_syms</span>)
+       <span class="kw">THEN</span> sym || <span class="cm">'_'</span> || <span class="fn">CAST</span>(<span class="fn">FLOOR</span>(<span class="fn">RAND</span>()*:N) <span class="kw">AS INT</span>)
+       <span class="kw">ELSE</span> sym
+  <span class="kw">END AS</span> salted_sym
+<span class="kw">FROM</span> market_data`,
+    3:
+`<span class="kw">CREATE OR REPLACE TEMP VIEW</span> trades_salted <span class="kw">AS</span>
+<span class="kw">SELECT</span> t.*,
+  <span class="kw">CASE WHEN</span> t.sym <span class="kw">IN</span> (<span class="cm">:hot_syms</span>)
+       <span class="kw">THEN</span> t.sym || <span class="cm">'_'</span> || salt.value
+       <span class="kw">ELSE</span> t.sym
+  <span class="kw">END AS</span> salted_sym
+<span class="kw">FROM</span> trades t
+<span class="kw">LEFT JOIN</span> (<span class="kw">SELECT</span> <span class="fn">EXPLODE</span>(<span class="fn">SEQUENCE</span>(0, :N-1)) <span class="kw">AS</span> value) salt
+  <span class="kw">ON</span> t.sym <span class="kw">IN</span> (<span class="cm">:hot_syms</span>)`,
+    4:
+`<span class="kw">SELECT</span> ts.trade_id,
+       <span class="fn">COUNT</span>(*) <span class="kw">AS</span> row_count,
+       <span class="fn">MIN</span>(md.price) <span class="kw">AS</span> min_price,
+       <span class="fn">MAX</span>(md.price) <span class="kw">AS</span> max_price
+<span class="kw">FROM</span> trades_salted ts
+<span class="kw">JOIN</span> market_data_salted md
+  <span class="kw">ON</span> md.salted_sym = ts.salted_sym
+ <span class="kw">AND</span> md.transaction_time <span class="kw">BETWEEN</span> ts.start_time <span class="kw">AND</span> ts.end_time
+<span class="kw">GROUP BY</span> ts.trade_id <span class="cm">-- not salted_sym — recombines the N shards</span>`
+  };
+
+  function sAutoScroll(){
+    if($('s-in-autoscroll').checked){
+      $('s-panel-view').scrollIntoView({behavior:'smooth', block:'start'});
+    }
+  }
+
+  function sRunStage(n){
+    sSetStage(n);
+    $('s-stage-sql-box').innerHTML = S_SQL[n];
+    const narr = $('s-narration');
+    const median = symCounts.slice(1).reduce((s,c)=>s+c.count,0) / Math.max(1,symCounts.length-1);
+    const skewRatio = (hotCount/median).toFixed(1);
+    const maxShard = Math.max(...shardCounts);
+
+    if(n===0){
+      sRenderShardChart('before');
+      narr.innerHTML = '<b>Stage 0 — Diagnose.</b> RELIANCE.NS has '+hotCount+' rows vs a median of ~'+Math.round(median)+' for other syms — a skew ratio of <b>'+skewRatio+'×</b>. A plain sort-merge join shuffles on <code>sym</code>, so every row of RELIANCE.NS lands in the same task.';
+      sAddDerivation('STAGE 0', 'skew_ratio = hot_count / median_other_count = '+hotCount+' / '+Math.round(median)+' <span class="eq">= '+skewRatio+'×</span> — that one task takes roughly '+skewRatio+'× as long as the rest, and the whole stage waits on it.');
+      const rows = [...symCounts].sort((a,b)=>b.count-a.count).map(c=>'<tr class="'+(c.hot?'excluded':'')+'"><td>'+c.sym+'</td><td>'+c.count+'</td><td>'+(c.hot?'← hot':'')+'</td></tr>').join('');
+      $('s-out-caption').textContent = 'GROUP BY sym, COUNT(*) ORDER BY cnt DESC';
+      $('s-stage-out-table').innerHTML = '<table class="out-table"><thead><tr><th>sym</th><th>cnt</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+      $('s-stage-out-empty').style.display='none';
+    }
+
+    if(n===1){
+      const target = Math.round(hotCount/saltN);
+      narr.innerHTML = '<b>Stage 1 — Pick N.</b> With N='+saltN+', each shard should land around <b>'+target+'</b> rows — much closer to the other syms\' sizes, instead of one task holding all '+hotCount+'.';
+      sAddDerivation('STAGE 1', 'target_shard_size = hot_count / N = '+hotCount+' / '+saltN+' <span class="eq">≈ '+target+'</span> rows per shard — compare to median other-sym size ~'+Math.round(median)+', so N='+saltN+' brings it into the same ballpark.');
+      $('s-out-caption').textContent = 'Sizing summary';
+      $('s-stage-out-table').innerHTML = '<table class="out-table"><thead><tr><th>hot_count</th><th>N</th><th>target_shard_size</th><th>median_other</th></tr></thead><tbody><tr class="total"><td>'+hotCount+'</td><td>'+saltN+'</td><td>'+target+'</td><td>'+Math.round(median)+'</td></tr></tbody></table>';
+      $('s-stage-out-empty').style.display='none';
+    }
+
+    if(n===2){
+      sRenderShardChart('after');
+      narr.innerHTML = '<b>Stage 2 — Salt the large side.</b> Only rows where <code>sym</code> is hot get a random suffix appended, turning one key into '+saltN+' synthetic keys. Other syms pass through untouched — salting them would just fragment already-small partitions.';
+      sAddDerivation('STAGE 2', 'salted_sym = sym || \'_\' || FLOOR(RAND()*'+saltN+') for RELIANCE.NS rows only &nbsp;→&nbsp; shard sizes: {'+shardCounts.join(', ')+'} (sum = '+shardCounts.reduce((a,b)=>a+b,0)+', matches hot_count)');
+      const sample = hotTicks.slice(0,4).map((tk,i)=>'<tr class="included"><td>RELIANCE.NS</td><td>'+tk.price.toFixed(2)+'</td><td>RELIANCE_'+(i%saltN)+'</td></tr>').join('')
+        + '<tr><td>'+otherSampleRow.sym+'</td><td>'+otherSampleRow.price.toFixed(2)+'</td><td>'+otherSampleRow.sym+' <span style="color:var(--muted2)">(unchanged)</span></td></tr>';
+      $('s-out-caption').textContent = 'market_data_salted — sample rows';
+      $('s-stage-out-table').innerHTML = '<table class="out-table"><thead><tr><th>sym</th><th>price</th><th>salted_sym</th></tr></thead><tbody>'+sample+'</tbody></table>';
+      $('s-stage-out-empty').style.display='none';
+    }
+
+    if(n===3){
+      sRenderShardChart('after');
+      const exploded = Array.from({length:saltN}, (_,i)=>
+        '<tr><td>T-2001'+'</td><td>RELIANCE.NS</td><td>RELIANCE_'+i+'</td></tr>'
+      ).join('');
+      narr.innerHTML = '<b>Stage 3 — Explode the small side.</b> trades doesn\'t know in advance which salt value a matching market_data row got — so trade T-2001 (on the hot sym) is duplicated into '+saltN+' candidate rows, one per salt value. A trade on a non-hot sym stays as a single row.';
+      sAddDerivation('STAGE 3', 'trade T-2001 (sym=RELIANCE.NS) &nbsp;→&nbsp; '+saltN+' rows, salted_sym ∈ {RELIANCE_0 .. RELIANCE_'+(saltN-1)+'} &nbsp;·&nbsp; a non-hot trade would stay as exactly 1 row, unexploded.');
+      $('s-out-caption').textContent = 'trades_salted — exploded rows for T-2001';
+      $('s-stage-out-table').innerHTML = '<table class="out-table"><thead><tr><th>trade_id</th><th>sym</th><th>salted_sym</th></tr></thead><tbody>'+exploded+'</tbody></table>';
+      $('s-stage-out-empty').style.display='none';
+    }
+
+    if(n===4){
+      sRenderShardChart('after');
+      const result = { count: hotTicks.length, min: Math.min(...hotTicks.map(t=>t.price)), max: Math.max(...hotTicks.map(t=>t.price)) };
+      narr.innerHTML = '<b>Stage 4 — Join + aggregate back.</b> The join now runs on <code>salted_sym</code>, so the '+hotCount+' hot rows are spread across '+saltN+' parallel tasks (largest ≈ '+maxShard+' rows) instead of one task holding all of them. <code>GROUP BY trade_id</code> — not <code>salted_sym</code> — merges the '+saltN+' exploded copies of T-2001 back into one output row.';
+      sAddDerivation('STAGE 4', 'max partition: '+hotCount+' → '+maxShard+' rows &nbsp;(<span class="eq">'+(hotCount/maxShard).toFixed(1)+'× smaller</span>) &nbsp;·&nbsp; GROUP BY ts.trade_id recombines the '+saltN+' shards &nbsp;→&nbsp; <b>row_count='+result.count+', min='+result.min.toFixed(2)+', max='+result.max.toFixed(2)+'</b> — identical to an unsalted join, just built from parallel shards.');
+      $('s-out-caption').textContent = 'Final combined output row';
+      $('s-stage-out-table').innerHTML = '<table class="out-table"><thead><tr><th>trade_id</th><th>row_count</th><th>min_price</th><th>max_price</th></tr></thead><tbody><tr class="total"><td>T-2001</td><td>'+result.count+'</td><td>'+result.min.toFixed(2)+'</td><td>'+result.max.toFixed(2)+'</td></tr></tbody></table>';
+      $('s-stage-out-empty').style.display='none';
+
+      $('s-res-before').textContent = hotCount;
+      $('s-res-after').textContent = maxShard;
+      $('s-res-count').textContent = result.count;
+      $('s-res-factor').textContent = (hotCount/maxShard).toFixed(1)+'×';
+      const maxBar = Math.max(hotCount, maxShard);
+      $('s-bar-before').style.width = (100*hotCount/maxBar)+'%';
+      $('s-bar-after').style.width = (100*maxShard/maxBar)+'%';
+      $('s-val-before').textContent = hotCount+' rows';
+      $('s-val-after').textContent = maxShard+' rows';
+    }
+
+    $('s-stage-explain').innerHTML = narr.innerHTML;
+    sAutoScroll();
+  }
+
+  function sGoToStage(n){
+    n = Math.max(0, Math.min(4, n));
+    $('s-derivation').innerHTML = '';
+    for(let i=0;i<=n;i++){ sRunStage(i); }
+  }
+  function sStepForward(){ if(sCurrentStage<4) sGoToStage(sCurrentStage+1); }
+  function sStepBack(){
+    if(sCurrentStage<=0){ if(sCurrentStage===0) sResetStages(); return; }
+    sGoToStage(sCurrentStage-1);
+  }
+
+  function sResetStages(){
+    sCurrentStage = -1;
+    document.querySelectorAll('#s-stages .stage').forEach(s=>s.classList.remove('active','done'));
+    document.querySelectorAll('#s-tb-dots .dot').forEach(d=>d.classList.remove('active','done'));
+    $('s-tb-stage-n').textContent='–';
+    $('s-stage-pos').textContent='not started';
+    $('s-narration').innerHTML = 'Click any stage card, or use Next, to see how salting spreads the hot sym\'s rows across N shuffle partitions.';
+    $('s-stage-explain').innerHTML = 'Press <b>Next stage →</b> to see the explanation for each step here.';
+    $('s-stage-sql-box').innerHTML = 'Run a stage to see its SQL here.';
+    $('s-stage-out-table').innerHTML = '';
+    $('s-stage-out-empty').style.display='block';
+    $('s-out-caption').textContent = 'Intermediate result table';
+    $('s-derivation').innerHTML = '<div class="derivation-empty">Press <b>Next stage →</b> — each step\'s logic will appear here as it runs.</div>';
+    ['s-res-before','s-res-after','s-res-count','s-res-factor'].forEach(id=>$(id).textContent='—');
+    $('s-bar-before').style.width='0%'; $('s-bar-after').style.width='0%';
+    $('s-val-before').textContent='0'; $('s-val-after').textContent='0';
+    sRenderShardChart('before');
+  }
+
+  async function sRunAll(){
+    if(sRunning) return;
+    sRunning = true;
+    const delay = Math.max(100, parseInt($('s-in-delay').value) || 750);
+    document.querySelectorAll('#view-salting button').forEach(b=>b.disabled=true);
+    sResetStages();
+    for(let i=0;i<=4;i++){
+      await new Promise(r=>setTimeout(r, delay));
+      sRunStage(i);
+    }
+    sRunning = false;
+    document.querySelectorAll('#view-salting button').forEach(b=>b.disabled=false);
+  }
+
+  function sExport(){
+    const maxShard = Math.max(...shardCounts);
+    const payload = {
+      hot_sym: 'RELIANCE.NS',
+      hot_count: hotCount,
+      salt_factor_n: saltN,
+      shard_counts: shardCounts,
+      max_partition_before: hotCount,
+      max_partition_after: maxShard,
+      reduction_factor: +(hotCount/maxShard).toFixed(2),
+      other_syms: symCounts.slice(1),
+      sql: "CREATE OR REPLACE TEMP VIEW market_data_salted AS SELECT *, CASE WHEN sym IN (:hot_syms) THEN sym || '_' || CAST(FLOOR(RAND()*:N) AS INT) ELSE sym END AS salted_sym FROM market_data; -- then join trades_salted (exploded) on salted_sym, GROUP BY trade_id"
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'salting-result.json';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  $('s-btn-generate').addEventListener('click', sGenerateData);
+  $('s-btn-run').addEventListener('click', sRunAll);
+  $('s-btn-step').addEventListener('click', sStepForward);
+  $('s-btn-next-inline').addEventListener('click', sStepForward);
+  $('s-btn-prev').addEventListener('click', sStepBack);
+  $('s-btn-prev-inline').addEventListener('click', sStepBack);
+  $('s-btn-reset').addEventListener('click', sResetStages);
+  $('s-btn-export').addEventListener('click', sExport);
+  document.querySelectorAll('#s-stages .stage').forEach(el=>{
+    el.addEventListener('click', ()=>{ if(!sRunning) sGoToStage(parseInt(el.dataset.stage)); });
+  });
+  ['s-in-hot','s-in-other','s-in-nsyms','s-in-saltn'].forEach(id=>{
+    $(id).addEventListener('change', sGenerateData);
+  });
+
+  sGenerateData();
+})();
+</script>
+
+<script>
+  document.querySelectorAll('.landing-tile').forEach(el=>{
+    el.addEventListener('click', ()=>switchView(el.dataset.target));
+  });
+  document.querySelectorAll('.back-btn').forEach(el=>{
+    el.addEventListener('click', ()=>switchView(el.dataset.target));
+  });
+  function switchView(id){
+    ['view-landing','view-bucket','view-salting'].forEach(v=>{
+      document.getElementById(v).style.display = (v===id) ? 'block' : 'none';
+    });
+    window.scrollTo({top:0, behavior:'instant'});
+  }
+</script>
+</body>
+</html>
